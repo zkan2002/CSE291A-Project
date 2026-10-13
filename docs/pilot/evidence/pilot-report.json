@@ -1,0 +1,1777 @@
+{
+  "started_at": "2026-10-13T23:36:53.874319+00:00",
+  "server_config": {
+    "binary": "C:/CSE291A/artifacts/llama.cpp/b11606/llama-server.exe",
+    "model": "C:/CSE291A/artifacts/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+    "memory_budget": 2048,
+    "slots": 4,
+    "host": "127.0.0.1",
+    "port": 8091,
+    "gpu_layers": 99,
+    "cache_ram_mib": 0,
+    "cache_idle_slots": false,
+    "cache_prompt": true,
+    "extra_args": []
+  },
+  "probes": {
+    "prefix_extension": {
+      "name": "prefix_extension",
+      "doc": "A second request that extends the first one's prompt reports cached tokens; and slot selection order (id_slot, then LCP similarity, then LRU).",
+      "config_overrides": {},
+      "server_alive_at_end": true,
+      "server_exit_code_if_dead": null,
+      "health_at_end": {
+        "status": "ok"
+      },
+      "findings": {
+        "b_cached_tokens": 631,
+        "b_cached_expected_at_most": 632,
+        "slots_chosen": {
+          "A": 0,
+          "B": 0,
+          "C": 3,
+          "D": 0,
+          "E": 2
+        },
+        "d_cached_tokens": 863
+      },
+      "requests": [
+        {
+          "label": "A: 600-token prompt pinned to slot 0",
+          "prompt_tokens": 600,
+          "n_predict": 32,
+          "id_slot_requested": 0,
+          "t_send": 0.0,
+          "t_done": 0.375,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 631,
+            "tokens_evaluated": 600
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 0,
+            "prompt_tokens": 600,
+            "cached_tokens": 0,
+            "output_tokens": 32,
+            "prompt_ms": 126.919,
+            "predicted_ms": 219.615
+          }
+        },
+        {
+          "label": "B: A + A's output + 200-token tool result, pinned to slot 0",
+          "prompt_tokens": 832,
+          "n_predict": 32,
+          "id_slot_requested": 0,
+          "t_send": 0.375,
+          "t_done": 0.641,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 863,
+            "tokens_evaluated": 832
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 0,
+            "prompt_tokens": 832,
+            "cached_tokens": 631,
+            "output_tokens": 32,
+            "prompt_ms": 45.315,
+            "predicted_ms": 218.695
+          }
+        },
+        {
+          "label": "C: unrelated 300-token prompt, no id_slot (expect LRU)",
+          "prompt_tokens": 300,
+          "n_predict": 16,
+          "id_slot_requested": -1,
+          "t_send": 0.641,
+          "t_done": 0.813,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 315,
+            "tokens_evaluated": 300
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 3,
+            "prompt_tokens": 300,
+            "cached_tokens": 0,
+            "output_tokens": 16,
+            "prompt_ms": 61.105,
+            "predicted_ms": 107.988
+          }
+        },
+        {
+          "label": "D: extends B, no id_slot (expect LCP similarity -> slot 0)",
+          "prompt_tokens": 1064,
+          "n_predict": 16,
+          "id_slot_requested": -1,
+          "t_send": 0.813,
+          "t_done": 0.985,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 1079,
+            "tokens_evaluated": 1064
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 0,
+            "prompt_tokens": 1064,
+            "cached_tokens": 863,
+            "output_tokens": 16,
+            "prompt_ms": 47.416,
+            "predicted_ms": 111.622
+          }
+        },
+        {
+          "label": "E: another unrelated prompt, no id_slot (expect LRU)",
+          "prompt_tokens": 300,
+          "n_predict": 16,
+          "id_slot_requested": -1,
+          "t_send": 0.985,
+          "t_done": 1.157,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 315,
+            "tokens_evaluated": 300
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 2,
+            "prompt_tokens": 300,
+            "cached_tokens": 0,
+            "output_tokens": 16,
+            "prompt_ms": 63.855,
+            "predicted_ms": 112.12
+          }
+        }
+      ],
+      "notes": [
+        {
+          "label": "slots at end",
+          "t": 1.157,
+          "path": "/slots",
+          "value": [
+            {
+              "id": 0,
+              "n_ctx": 2048,
+              "is_processing": false,
+              "id_task": 83,
+              "n_prompt_tokens": 1079
+            },
+            {
+              "id": 1,
+              "n_ctx": 2048,
+              "is_processing": false
+            },
+            {
+              "id": 2,
+              "n_ctx": 2048,
+              "is_processing": false,
+              "id_task": 100,
+              "n_prompt_tokens": 315
+            },
+            {
+              "id": 3,
+              "n_ctx": 2048,
+              "is_processing": false,
+              "id_task": 66,
+              "n_prompt_tokens": 315
+            }
+          ]
+        }
+      ],
+      "server_log_evidence": [
+        "0.01.605.229 I slot get_availabl: id  0 | task -1 | selected slot by id (0)",
+        "0.01.955.628 I slot get_availabl: id  0 | task -1 | selected slot by id (0)",
+        "0.02.223.057 I slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = -1",
+        "0.02.395.603 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.811 (> 0.100 thold), f_keep = 1.000",
+        "0.02.557.826 I slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = -1"
+      ]
+    },
+    "slot_queueing": {
+      "name": "slot_queueing",
+      "doc": "Requests beyond -np running sequences wait in the runtime's queue; a request pinned to a busy slot waits for that slot.",
+      "config_overrides": {},
+      "server_alive_at_end": true,
+      "server_exit_code_if_dead": null,
+      "health_at_end": {
+        "status": "ok"
+      },
+      "findings": {
+        "six_done_at": [
+          2.016,
+          2.016,
+          2.063,
+          2.063,
+          3.61,
+          3.61
+        ],
+        "requests_processing_mid": 4.0,
+        "requests_deferred_mid": 2.0,
+        "pinned_slots": [
+          0,
+          0
+        ],
+        "pinned_done_at": [
+          5.032,
+          6.469
+        ]
+      },
+      "requests": [
+        {
+          "label": "Q1: 100+200, no id_slot",
+          "prompt_tokens": 100,
+          "n_predict": 200,
+          "id_slot_requested": -1,
+          "t_send": 0.0,
+          "t_done": 2.016,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 299,
+            "tokens_evaluated": 100
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 2,
+            "prompt_tokens": 100,
+            "cached_tokens": 0,
+            "output_tokens": 200,
+            "prompt_ms": 52.926,
+            "predicted_ms": 1947.138
+          }
+        },
+        {
+          "label": "Q0: 100+200, no id_slot",
+          "prompt_tokens": 100,
+          "n_predict": 200,
+          "id_slot_requested": -1,
+          "t_send": 0.0,
+          "t_done": 2.016,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 299,
+            "tokens_evaluated": 100
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 3,
+            "prompt_tokens": 100,
+            "cached_tokens": 0,
+            "output_tokens": 200,
+            "prompt_ms": 53.208,
+            "predicted_ms": 1947.011
+          }
+        },
+        {
+          "label": "Q3: 100+200, no id_slot",
+          "prompt_tokens": 100,
+          "n_predict": 200,
+          "id_slot_requested": -1,
+          "t_send": 0.0,
+          "t_done": 2.063,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 299,
+            "tokens_evaluated": 100
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 0,
+            "prompt_tokens": 100,
+            "cached_tokens": 0,
+            "output_tokens": 200,
+            "prompt_ms": 47.668,
+            "predicted_ms": 1946.591
+          }
+        },
+        {
+          "label": "Q2: 100+200, no id_slot",
+          "prompt_tokens": 100,
+          "n_predict": 200,
+          "id_slot_requested": -1,
+          "t_send": 0.0,
+          "t_done": 2.063,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 299,
+            "tokens_evaluated": 100
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 1,
+            "prompt_tokens": 100,
+            "cached_tokens": 0,
+            "output_tokens": 200,
+            "prompt_ms": 47.951,
+            "predicted_ms": 1946.476
+          }
+        },
+        {
+          "label": "Q5: 100+200, no id_slot",
+          "prompt_tokens": 100,
+          "n_predict": 200,
+          "id_slot_requested": -1,
+          "t_send": 0.0,
+          "t_done": 3.61,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 299,
+            "tokens_evaluated": 100
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 2,
+            "prompt_tokens": 100,
+            "cached_tokens": 0,
+            "output_tokens": 200,
+            "prompt_ms": 47.689,
+            "predicted_ms": 1543.507
+          }
+        },
+        {
+          "label": "Q4: 100+200, no id_slot",
+          "prompt_tokens": 100,
+          "n_predict": 200,
+          "id_slot_requested": -1,
+          "t_send": 0.0,
+          "t_done": 3.61,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 299,
+            "tokens_evaluated": 100
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 3,
+            "prompt_tokens": 100,
+            "cached_tokens": 0,
+            "output_tokens": 200,
+            "prompt_ms": 47.959,
+            "predicted_ms": 1543.361
+          }
+        },
+        {
+          "label": "P0: pinned to slot 0",
+          "prompt_tokens": 100,
+          "n_predict": 200,
+          "id_slot_requested": 0,
+          "t_send": 3.61,
+          "t_done": 5.032,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 299,
+            "tokens_evaluated": 100
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 0,
+            "prompt_tokens": 100,
+            "cached_tokens": 0,
+            "output_tokens": 200,
+            "prompt_ms": 27.547,
+            "predicted_ms": 1402.092
+          }
+        },
+        {
+          "label": "P1: also pinned to slot 0",
+          "prompt_tokens": 100,
+          "n_predict": 200,
+          "id_slot_requested": 0,
+          "t_send": 3.61,
+          "t_done": 6.469,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 299,
+            "tokens_evaluated": 100
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 0,
+            "prompt_tokens": 100,
+            "cached_tokens": 0,
+            "output_tokens": 200,
+            "prompt_ms": 27.884,
+            "predicted_ms": 1400.08
+          }
+        }
+      ],
+      "notes": [
+        {
+          "label": "metrics while 6 requests are in flight on 4 slots",
+          "t": 0.297,
+          "path": "/metrics",
+          "value": {
+            "prompt_tokens_total": 400.0,
+            "prompt_tokens_cached_total": 0.0,
+            "prompt_seconds_total": 0.099799,
+            "tokens_predicted_total": 0.0,
+            "tokens_predicted_seconds_total": 0.0,
+            "n_decode_total": 20.0,
+            "n_tokens_max": 119.0,
+            "spec_decode_num_draft_tokens_total": 0.0,
+            "spec_decode_num_accepted_tokens_total": 0.0,
+            "spec_decode_num_drafts_total": 0.0,
+            "prompt_tokens_seconds": 4008.06,
+            "predicted_tokens_seconds": 0.0,
+            "requests_processing": 4.0,
+            "requests_deferred": 2.0,
+            "n_busy_slots_per_decode": 3.9
+          }
+        }
+      ],
+      "server_log_evidence": [
+        "0.01.553.241 I slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = -1",
+        "0.01.553.275 I slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = -1",
+        "0.01.606.554 I slot get_availabl: id  1 | task -1 | selected slot by LRU, t_last = -1",
+        "0.01.606.570 I slot get_availabl: id  0 | task -1 | selected slot by LRU, t_last = -1",
+        "0.03.553.592 I slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = 3476184",
+        "0.03.553.689 I slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = 3476350",
+        "0.05.150.425 I slot get_availabl: id  0 | task -1 | selected slot by id (0)",
+        "0.06.580.199 I slot get_availabl: id  0 | task -1 | selected slot by id (0)"
+      ]
+    },
+    "idle_slot_deletion": {
+      "name": "idle_slot_deletion",
+      "doc": "Fill the pool with idle slots' KV, then start a request that needs more room. Fill order 2, 1, 0 so that slot 2 is least recently used but slot 0 is first in index order.",
+      "config_overrides": {},
+      "server_alive_at_end": true,
+      "server_exit_code_if_dead": null,
+      "health_at_end": {
+        "status": "ok"
+      },
+      "findings": {
+        "big_request_ok": true,
+        "recheck_cached_tokens": {
+          "2": 499,
+          "1": 499,
+          "0": 0
+        }
+      },
+      "requests": [
+        {
+          "label": "fill slot 2 with 500+8",
+          "prompt_tokens": 500,
+          "n_predict": 8,
+          "id_slot_requested": 2,
+          "t_send": 0.0,
+          "t_done": 0.156,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 507,
+            "tokens_evaluated": 500
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 2,
+            "prompt_tokens": 500,
+            "cached_tokens": 0,
+            "output_tokens": 8,
+            "prompt_ms": 96.232,
+            "predicted_ms": 51.263
+          }
+        },
+        {
+          "label": "fill slot 1 with 500+8",
+          "prompt_tokens": 500,
+          "n_predict": 8,
+          "id_slot_requested": 1,
+          "t_send": 0.156,
+          "t_done": 0.296,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 507,
+            "tokens_evaluated": 500
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 1,
+            "prompt_tokens": 500,
+            "cached_tokens": 0,
+            "output_tokens": 8,
+            "prompt_ms": 92.241,
+            "predicted_ms": 50.862
+          }
+        },
+        {
+          "label": "fill slot 0 with 500+8",
+          "prompt_tokens": 500,
+          "n_predict": 8,
+          "id_slot_requested": 0,
+          "t_send": 0.296,
+          "t_done": 0.453,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 507,
+            "tokens_evaluated": 500
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 0,
+            "prompt_tokens": 500,
+            "cached_tokens": 0,
+            "output_tokens": 8,
+            "prompt_ms": 94.623,
+            "predicted_ms": 53.057
+          }
+        },
+        {
+          "label": "slot 3: 700+8 needs more than the free pool",
+          "prompt_tokens": 700,
+          "n_predict": 8,
+          "id_slot_requested": 3,
+          "t_send": 0.453,
+          "t_done": 0.64,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 707,
+            "tokens_evaluated": 700
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 3,
+            "prompt_tokens": 700,
+            "cached_tokens": 0,
+            "output_tokens": 8,
+            "prompt_ms": 136.713,
+            "predicted_ms": 51.925
+          }
+        },
+        {
+          "label": "recheck slot 2: resend its prompt",
+          "prompt_tokens": 500,
+          "n_predict": 1,
+          "id_slot_requested": 2,
+          "t_send": 0.64,
+          "t_done": 0.656,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 500,
+            "tokens_evaluated": 500
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 2,
+            "prompt_tokens": 500,
+            "cached_tokens": 499,
+            "output_tokens": 1,
+            "prompt_ms": 7.425,
+            "predicted_ms": 0.001
+          }
+        },
+        {
+          "label": "recheck slot 1: resend its prompt",
+          "prompt_tokens": 500,
+          "n_predict": 1,
+          "id_slot_requested": 1,
+          "t_send": 0.656,
+          "t_done": 0.671,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 500,
+            "tokens_evaluated": 500
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 1,
+            "prompt_tokens": 500,
+            "cached_tokens": 499,
+            "output_tokens": 1,
+            "prompt_ms": 7.449,
+            "predicted_ms": 0.001
+          }
+        },
+        {
+          "label": "recheck slot 0: resend its prompt",
+          "prompt_tokens": 500,
+          "n_predict": 1,
+          "id_slot_requested": 0,
+          "t_send": 0.671,
+          "t_done": 0.765,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 500,
+            "tokens_evaluated": 500
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 0,
+            "prompt_tokens": 500,
+            "cached_tokens": 0,
+            "output_tokens": 1,
+            "prompt_ms": 95.155,
+            "predicted_ms": 0.001
+          }
+        }
+      ],
+      "notes": [
+        {
+          "label": "slots after fill",
+          "t": 0.453,
+          "path": "/slots",
+          "value": [
+            {
+              "id": 0,
+              "n_ctx": 2048,
+              "is_processing": false,
+              "id_task": 18,
+              "n_prompt_tokens": 507
+            },
+            {
+              "id": 1,
+              "n_ctx": 2048,
+              "is_processing": false,
+              "id_task": 9,
+              "n_prompt_tokens": 507
+            },
+            {
+              "id": 2,
+              "n_ctx": 2048,
+              "is_processing": false,
+              "id_task": 0,
+              "n_prompt_tokens": 507
+            },
+            {
+              "id": 3,
+              "n_ctx": 2048,
+              "is_processing": false
+            }
+          ]
+        }
+      ],
+      "server_log_evidence": [
+        "0.01.534.736 I slot get_availabl: id  2 | task -1 | selected slot by id (2)",
+        "0.01.685.202 I slot get_availabl: id  1 | task -1 | selected slot by id (1)",
+        "0.01.831.475 I slot get_availabl: id  0 | task -1 | selected slot by id (0)",
+        "0.01.984.491 I slot get_availabl: id  3 | task -1 | selected slot by id (3)",
+        "0.01.985.341 W srv  try_clear_id: purging slot 0 with 507 tokens",
+        "0.01.985.416 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 0, n_batch = 2048, ret = 1",
+        "0.02.176.035 I slot get_availabl: id  2 | task -1 | selected slot by id (2)",
+        "0.02.188.921 I slot get_availabl: id  1 | task -1 | selected slot by id (1)",
+        "0.02.198.870 I slot get_availabl: id  0 | task -1 | selected slot by id (0)",
+        "0.02.199.246 W srv  try_clear_id: purging slot 1 with 500 tokens",
+        "0.02.199.324 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 0, n_batch = 2048, ret = 1"
+      ]
+    },
+    "overflow_abort": {
+      "name": "overflow_abort",
+      "doc": "Four running sequences that together outgrow the pool (4 x (400 + 400) > 2048), plus a fifth request queued behind them.",
+      "config_overrides": {},
+      "server_alive_at_end": true,
+      "server_exit_code_if_dead": null,
+      "health_at_end": {
+        "status": "ok"
+      },
+      "findings": {
+        "statuses": [
+          500,
+          500,
+          500,
+          500,
+          200
+        ],
+        "kinds": [
+          "pool_exhausted",
+          "pool_exhausted",
+          "pool_exhausted",
+          "pool_exhausted",
+          "ok"
+        ],
+        "health_after": {
+          "status": "ok"
+        },
+        "follow_up_ok": true
+      },
+      "requests": [
+        {
+          "label": "R0: 400+400 on slot 0",
+          "prompt_tokens": 400,
+          "n_predict": 400,
+          "id_slot_requested": 0,
+          "t_send": 0.0,
+          "t_done": 1.438,
+          "status": 500,
+          "outcome": {
+            "ok": false,
+            "kind": "pool_exhausted",
+            "message": "Context size has been exceeded.",
+            "body": {
+              "error": {
+                "code": 500,
+                "message": "Context size has been exceeded.",
+                "type": "server_error"
+              }
+            }
+          }
+        },
+        {
+          "label": "R1: 400+400 on slot 1",
+          "prompt_tokens": 400,
+          "n_predict": 400,
+          "id_slot_requested": 1,
+          "t_send": 0.0,
+          "t_done": 1.453,
+          "status": 500,
+          "outcome": {
+            "ok": false,
+            "kind": "pool_exhausted",
+            "message": "Context size has been exceeded.",
+            "body": {
+              "error": {
+                "code": 500,
+                "message": "Context size has been exceeded.",
+                "type": "server_error"
+              }
+            }
+          }
+        },
+        {
+          "label": "R2: 400+400 on slot 2",
+          "prompt_tokens": 400,
+          "n_predict": 400,
+          "id_slot_requested": 2,
+          "t_send": 0.0,
+          "t_done": 1.453,
+          "status": 500,
+          "outcome": {
+            "ok": false,
+            "kind": "pool_exhausted",
+            "message": "Context size has been exceeded.",
+            "body": {
+              "error": {
+                "code": 500,
+                "message": "Context size has been exceeded.",
+                "type": "server_error"
+              }
+            }
+          }
+        },
+        {
+          "label": "R3: 400+400 on slot 3",
+          "prompt_tokens": 400,
+          "n_predict": 400,
+          "id_slot_requested": 3,
+          "t_send": 0.0,
+          "t_done": 1.453,
+          "status": 500,
+          "outcome": {
+            "ok": false,
+            "kind": "pool_exhausted",
+            "message": "Context size has been exceeded.",
+            "body": {
+              "error": {
+                "code": 500,
+                "message": "Context size has been exceeded.",
+                "type": "server_error"
+              }
+            }
+          }
+        },
+        {
+          "label": "R4: 100+16 queued (all slots busy)",
+          "prompt_tokens": 100,
+          "n_predict": 16,
+          "id_slot_requested": -1,
+          "t_send": 0.219,
+          "t_done": 1.578,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 115,
+            "tokens_evaluated": 100
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 0,
+            "prompt_tokens": 100,
+            "cached_tokens": 0,
+            "output_tokens": 16,
+            "prompt_ms": 26.146,
+            "predicted_ms": 102.009
+          }
+        },
+        {
+          "label": "after: fresh 100+16 request",
+          "prompt_tokens": 100,
+          "n_predict": 16,
+          "id_slot_requested": -1,
+          "t_send": 1.578,
+          "t_done": 1.703,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 115,
+            "tokens_evaluated": 100
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 1,
+            "prompt_tokens": 100,
+            "cached_tokens": 0,
+            "output_tokens": 16,
+            "prompt_ms": 26.793,
+            "predicted_ms": 100.97
+          }
+        }
+      ],
+      "notes": [
+        {
+          "label": "slots after abort",
+          "t": 1.703,
+          "path": "/slots",
+          "value": [
+            {
+              "id": 0,
+              "n_ctx": 2048,
+              "is_processing": false,
+              "id_task": 6,
+              "n_prompt_tokens": 115
+            },
+            {
+              "id": 1,
+              "n_ctx": 2048,
+              "is_processing": false,
+              "id_task": 139,
+              "n_prompt_tokens": 115
+            },
+            {
+              "id": 2,
+              "n_ctx": 2048,
+              "is_processing": false,
+              "id_task": 3,
+              "n_prompt_tokens": 0
+            },
+            {
+              "id": 3,
+              "n_ctx": 2048,
+              "is_processing": false,
+              "id_task": 4,
+              "n_prompt_tokens": 0
+            }
+          ]
+        },
+        {
+          "label": "metrics after abort",
+          "t": 1.703,
+          "path": "/metrics",
+          "value": {
+            "prompt_tokens_total": 1800.0,
+            "prompt_tokens_cached_total": 0.0,
+            "prompt_seconds_total": 0.376836,
+            "tokens_predicted_total": 484.0,
+            "tokens_predicted_seconds_total": 4.85128,
+            "n_decode_total": 147.0,
+            "n_tokens_max": 513.0,
+            "spec_decode_num_draft_tokens_total": 0.0,
+            "spec_decode_num_accepted_tokens_total": 0.0,
+            "spec_decode_num_drafts_total": 0.0,
+            "prompt_tokens_seconds": 4776.61,
+            "predicted_tokens_seconds": 98.5306,
+            "requests_processing": 0.0,
+            "requests_deferred": 0.0,
+            "n_busy_slots_per_decode": 3.32653
+          }
+        }
+      ],
+      "server_log_evidence": [
+        "0.01.535.165 I slot get_availabl: id  0 | task -1 | selected slot by id (0)",
+        "0.01.627.842 I slot get_availabl: id  1 | task -1 | selected slot by id (1)",
+        "0.01.627.866 I slot get_availabl: id  2 | task -1 | selected slot by id (2)",
+        "0.01.627.875 I slot get_availabl: id  3 | task -1 | selected slot by id (3)",
+        "0.02.955.610 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 0, n_batch = 1024, ret = 1",
+        "0.02.955.639 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 0, n_batch = 512, ret = 1",
+        "0.02.955.667 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 0, n_batch = 256, ret = 1",
+        "0.02.955.696 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 0, n_batch = 128, ret = 1",
+        "0.02.955.725 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 0, n_batch = 64, ret = 1",
+        "0.02.955.754 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 0, n_batch = 32, ret = 1",
+        "0.02.955.783 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 0, n_batch = 16, ret = 1",
+        "0.02.955.812 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 0, n_batch = 8, ret = 1",
+        "0.02.955.840 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 0, n_batch = 4, ret = 1",
+        "0.02.955.869 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 0, n_batch = 2, ret = 1",
+        "0.02.965.368 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 2, n_batch = 1024, ret = 1",
+        "0.02.965.392 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 2, n_batch = 512, ret = 1",
+        "0.02.965.416 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 2, n_batch = 256, ret = 1",
+        "0.02.965.440 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 2, n_batch = 128, ret = 1",
+        "0.02.965.461 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 2, n_batch = 64, ret = 1",
+        "0.02.965.481 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 2, n_batch = 32, ret = 1",
+        "0.02.965.500 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 2, n_batch = 16, ret = 1",
+        "0.02.965.519 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 2, n_batch = 8, ret = 1",
+        "0.02.965.542 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 2, n_batch = 4, ret = 1",
+        "0.02.965.568 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 2, n_batch = 2, ret = 1",
+        "0.02.965.593 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 2, n_batch = 1, ret = 1",
+        "0.02.974.193 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 3, n_batch = 1024, ret = 1",
+        "0.02.974.215 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 3, n_batch = 512, ret = 1",
+        "0.02.974.237 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 3, n_batch = 256, ret = 1",
+        "0.02.974.260 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 3, n_batch = 128, ret = 1",
+        "0.02.974.284 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 3, n_batch = 64, ret = 1",
+        "0.02.974.306 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 3, n_batch = 32, ret = 1",
+        "0.02.974.326 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 3, n_batch = 16, ret = 1",
+        "0.02.974.350 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 3, n_batch = 8, ret = 1",
+        "0.02.974.374 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 3, n_batch = 4, ret = 1",
+        "0.02.974.397 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 3, n_batch = 2, ret = 1",
+        "0.02.974.421 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 3, n_batch = 1, ret = 1",
+        "0.02.974.442 E srv        decode: Context size has been exceeded. off = 3, n_batch = 1, ret = 1",
+        "0.02.974.443 E srv    send_error: task id = 0, error: Context size has been exceeded.",
+        "0.02.974.552 E srv    send_error: task id = 1, error: Context size has been exceeded.",
+        "0.02.974.631 E srv    send_error: task id = 3, error: Context size has been exceeded.",
+        "0.02.974.709 E srv    send_error: task id = 4, error: Context size has been exceeded.",
+        "0.02.974.801 E srv  update_slots: decode() failed: Context size has been exceeded.",
+        "0.02.974.812 I slot get_availabl: id  0 | task -1 | selected slot by LRU, t_last = 2896989",
+        "0.03.107.365 I slot get_availabl: id  1 | task -1 | selected slot by LRU, t_last = 2897089"
+      ]
+    },
+    "oversize_prompt": {
+      "name": "oversize_prompt",
+      "doc": "A single prompt larger than a slot's context.",
+      "config_overrides": {},
+      "server_alive_at_end": true,
+      "server_exit_code_if_dead": null,
+      "health_at_end": {
+        "status": "ok"
+      },
+      "findings": {
+        "idle_reject_latency_s": 0.016,
+        "idle_status": 400,
+        "exact_status": 400,
+        "prompt_fits_but_output_does_not": {
+          "ok": true,
+          "id_slot": 1,
+          "prompt_tokens": 1900,
+          "cached_tokens": 0,
+          "output_tokens": 148,
+          "prompt_ms": 356.459,
+          "predicted_ms": 1058.008
+        },
+        "busy_reject_at": 4.422,
+        "busy_requests_done_at": [
+          4.422,
+          4.437,
+          4.437,
+          4.437
+        ]
+      },
+      "requests": [
+        {
+          "label": "2100-token prompt on idle server",
+          "prompt_tokens": 2100,
+          "n_predict": 8,
+          "id_slot_requested": -1,
+          "t_send": 0.0,
+          "t_done": 0.016,
+          "status": 400,
+          "outcome": {
+            "ok": false,
+            "kind": "exceeds_context",
+            "message": "request (2100 tokens) exceeds the available context size (2048 tokens), try increasing it",
+            "body": {
+              "error": {
+                "code": 400,
+                "message": "request (2100 tokens) exceeds the available context size (2048 tokens), try increasing it",
+                "type": "exceed_context_size_error",
+                "n_prompt_tokens": 2100,
+                "n_ctx": 2048
+              }
+            }
+          }
+        },
+        {
+          "label": "2048-token prompt (= n_ctx)",
+          "prompt_tokens": 2048,
+          "n_predict": 8,
+          "id_slot_requested": -1,
+          "t_send": 0.016,
+          "t_done": 0.016,
+          "status": 400,
+          "outcome": {
+            "ok": false,
+            "kind": "exceeds_context",
+            "message": "request (2048 tokens) exceeds the available context size (2048 tokens), try increasing it",
+            "body": {
+              "error": {
+                "code": 400,
+                "message": "request (2048 tokens) exceeds the available context size (2048 tokens), try increasing it",
+                "type": "exceed_context_size_error",
+                "n_prompt_tokens": 2048,
+                "n_ctx": 2048
+              }
+            }
+          }
+        },
+        {
+          "label": "1900-token prompt + n_predict 300 (sum > n_ctx)",
+          "prompt_tokens": 1900,
+          "n_predict": 300,
+          "id_slot_requested": -1,
+          "t_send": 0.016,
+          "t_done": 1.437,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": true,
+            "tokens_cached": 2047,
+            "tokens_evaluated": 1900
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 1,
+            "prompt_tokens": 1900,
+            "cached_tokens": 0,
+            "output_tokens": 148,
+            "prompt_ms": 356.459,
+            "predicted_ms": 1058.008
+          }
+        },
+        {
+          "label": "busy 0: 100+300",
+          "prompt_tokens": 100,
+          "n_predict": 300,
+          "id_slot_requested": 0,
+          "t_send": 1.437,
+          "t_done": 4.422,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 399,
+            "tokens_evaluated": 100
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 0,
+            "prompt_tokens": 100,
+            "cached_tokens": 0,
+            "output_tokens": 300,
+            "prompt_ms": 28.122,
+            "predicted_ms": 2949.625
+          }
+        },
+        {
+          "label": "2100-token prompt while all slots are busy",
+          "prompt_tokens": 2100,
+          "n_predict": 8,
+          "id_slot_requested": -1,
+          "t_send": 1.656,
+          "t_done": 4.422,
+          "status": 400,
+          "outcome": {
+            "ok": false,
+            "kind": "exceeds_context",
+            "message": "request (2100 tokens) exceeds the available context size (2048 tokens), try increasing it",
+            "body": {
+              "error": {
+                "code": 400,
+                "message": "request (2100 tokens) exceeds the available context size (2048 tokens), try increasing it",
+                "type": "exceed_context_size_error",
+                "n_prompt_tokens": 2100,
+                "n_ctx": 2048
+              }
+            }
+          }
+        },
+        {
+          "label": "busy 1: 100+300",
+          "prompt_tokens": 100,
+          "n_predict": 300,
+          "id_slot_requested": 1,
+          "t_send": 1.437,
+          "t_done": 4.437,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 399,
+            "tokens_evaluated": 100
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 1,
+            "prompt_tokens": 100,
+            "cached_tokens": 0,
+            "output_tokens": 300,
+            "prompt_ms": 58.266,
+            "predicted_ms": 2901.883
+          }
+        },
+        {
+          "label": "busy 2: 100+300",
+          "prompt_tokens": 100,
+          "n_predict": 300,
+          "id_slot_requested": 2,
+          "t_send": 1.437,
+          "t_done": 4.437,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 399,
+            "tokens_evaluated": 100
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 2,
+            "prompt_tokens": 100,
+            "cached_tokens": 0,
+            "output_tokens": 300,
+            "prompt_ms": 58.558,
+            "predicted_ms": 2901.757
+          }
+        },
+        {
+          "label": "busy 3: 100+300",
+          "prompt_tokens": 100,
+          "n_predict": 300,
+          "id_slot_requested": 3,
+          "t_send": 1.437,
+          "t_done": 4.437,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 399,
+            "tokens_evaluated": 100
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 3,
+            "prompt_tokens": 100,
+            "cached_tokens": 0,
+            "output_tokens": 300,
+            "prompt_ms": 58.847,
+            "predicted_ms": 2901.624
+          }
+        }
+      ],
+      "notes": [],
+      "server_log_evidence": [
+        "0.01.535.070 I slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = -1",
+        "0.01.535.108 E srv    send_error: task id = 0, error: request (2100 tokens) exceeds the available context size (2048 tokens), try increasing it",
+        "0.01.539.406 I slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = -1",
+        "0.01.539.428 E srv    send_error: task id = 3, error: request (2048 tokens) exceeds the available context size (2048 tokens), try increasing it",
+        "0.01.544.178 I slot get_availabl: id  1 | task -1 | selected slot by LRU, t_last = -1",
+        "0.02.969.770 I slot get_availabl: id  0 | task -1 | selected slot by id (0)",
+        "0.02.970.008 W srv  try_clear_id: purging slot 1 with 2047 tokens",
+        "0.02.970.428 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 0, n_batch = 2048, ret = 1",
+        "0.02.997.952 I slot get_availabl: id  1 | task -1 | selected slot by id (1)",
+        "0.02.998.018 I slot get_availabl: id  2 | task -1 | selected slot by id (2)",
+        "0.02.998.031 I slot get_availabl: id  3 | task -1 | selected slot by id (3)",
+        "0.05.948.031 I slot get_availabl: id  0 | task -1 | selected slot by LRU, t_last = 5869318",
+        "0.05.948.209 E srv    send_error: task id = 174, error: request (2100 tokens) exceeds the available context size (2048 tokens), try increasing it"
+      ]
+    },
+    "cache_idle_slots_on": {
+      "name": "cache_idle_slots_on",
+      "doc": "With --cache-idle-slots (+ --cache-ram), starting a new task offloads idle slots. Does the next agent step pinned to the offloaded slot still get cached tokens?",
+      "config_overrides": {
+        "cache_ram_mib": 512,
+        "cache_idle_slots": true,
+        "extra_args": [
+          "-lv",
+          "4"
+        ]
+      },
+      "server_alive_at_end": true,
+      "server_exit_code_if_dead": null,
+      "health_at_end": {
+        "status": "ok"
+      },
+      "findings": {
+        "b_cached_tokens": 0,
+        "c_cached_tokens": 863,
+        "c_slot": 0
+      },
+      "requests": [
+        {
+          "label": "A: 600+32 on slot 0",
+          "prompt_tokens": 600,
+          "n_predict": 32,
+          "id_slot_requested": 0,
+          "t_send": 0.0,
+          "t_done": 0.328,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 631,
+            "tokens_evaluated": 600
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 0,
+            "prompt_tokens": 600,
+            "cached_tokens": 0,
+            "output_tokens": 32,
+            "prompt_ms": 119.614,
+            "predicted_ms": 211.564
+          }
+        },
+        {
+          "label": "X: unrelated 300+16 on slot 1 (new task -> idle slot 0 offloaded?)",
+          "prompt_tokens": 300,
+          "n_predict": 16,
+          "id_slot_requested": 1,
+          "t_send": 0.328,
+          "t_done": 0.531,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 315,
+            "tokens_evaluated": 300
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 1,
+            "prompt_tokens": 300,
+            "cached_tokens": 0,
+            "output_tokens": 16,
+            "prompt_ms": 64.465,
+            "predicted_ms": 114.097
+          }
+        },
+        {
+          "label": "B: extends A, pinned to slot 0",
+          "prompt_tokens": 832,
+          "n_predict": 32,
+          "id_slot_requested": 0,
+          "t_send": 0.531,
+          "t_done": 0.921,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 863,
+            "tokens_evaluated": 832
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 0,
+            "prompt_tokens": 832,
+            "cached_tokens": 0,
+            "output_tokens": 32,
+            "prompt_ms": 164.091,
+            "predicted_ms": 220.616
+          }
+        },
+        {
+          "label": "C: extends B, no id_slot",
+          "prompt_tokens": 1064,
+          "n_predict": 16,
+          "id_slot_requested": -1,
+          "t_send": 0.921,
+          "t_done": 1.093,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 1079,
+            "tokens_evaluated": 1064
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 0,
+            "prompt_tokens": 1064,
+            "cached_tokens": 863,
+            "output_tokens": 16,
+            "prompt_ms": 46.05,
+            "predicted_ms": 111.261
+          }
+        }
+      ],
+      "notes": [
+        {
+          "label": "slots after A",
+          "t": 0.328,
+          "path": "/slots",
+          "value": [
+            {
+              "id": 0,
+              "n_ctx": 2048,
+              "is_processing": false,
+              "id_task": 0,
+              "n_prompt_tokens": 631
+            },
+            {
+              "id": 1,
+              "n_ctx": 2048,
+              "is_processing": false
+            },
+            {
+              "id": 2,
+              "n_ctx": 2048,
+              "is_processing": false
+            },
+            {
+              "id": 3,
+              "n_ctx": 2048,
+              "is_processing": false
+            }
+          ]
+        },
+        {
+          "label": "slots after X",
+          "t": 0.531,
+          "path": "/slots",
+          "value": [
+            {
+              "id": 0,
+              "n_ctx": 2048,
+              "is_processing": false,
+              "id_task": 0,
+              "n_prompt_tokens": 0
+            },
+            {
+              "id": 1,
+              "n_ctx": 2048,
+              "is_processing": false,
+              "id_task": 34,
+              "n_prompt_tokens": 315
+            },
+            {
+              "id": 2,
+              "n_ctx": 2048,
+              "is_processing": false
+            },
+            {
+              "id": 3,
+              "n_ctx": 2048,
+              "is_processing": false
+            }
+          ]
+        }
+      ],
+      "server_log_evidence": [
+        "0.00.362.290 I load: special tokens cache size = 256",
+        "0.00.380.736 I load: token to piece cache size = 0.7999 MB",
+        "0.01.177.966 I srv    load_model: prompt cache is enabled, size limit: 512 MiB",
+        "0.01.177.967 I srv    load_model: use `--cache-ram 0` to disable the prompt cache",
+        "0.01.177.988 I srv          init: idle slots will be saved to prompt cache and cleared upon starting a new task",
+        "0.01.531.748 I slot get_availabl: id  0 | task -1 | selected slot by id (0)",
+        "0.01.531.805 I slot process_sing: id  1 | task -1 | saving idle slot to prompt cache",
+        "0.01.531.811 I slot process_sing: id  2 | task -1 | saving idle slot to prompt cache",
+        "0.01.531.813 I slot process_sing: id  3 | task -1 | saving idle slot to prompt cache",
+        "0.01.868.127 I slot get_availabl: id  1 | task -1 | selected slot by id (1)",
+        "0.01.868.174 I slot process_sing: id  0 | task -1 | saving idle slot to prompt cache",
+        "0.01.868.222 I srv   prompt_save:  - saving prompt with length 631, total state size = 69.024 MiB (draft: 0.000 MiB)",
+        "0.01.882.589 I srv        update:  - cache state: 1 prompts, 69.024 MiB (limits: 512.000 MiB, 2048 tokens, 4680 est)",
+        "0.01.882.594 I srv        update:    - prompt 000001FE2A3E66B0:     631 tokens, checkpoints:  0,    69.024 MiB",
+        "0.01.882.682 I slot process_sing: id  2 | task -1 | saving idle slot to prompt cache",
+        "0.01.882.686 I slot process_sing: id  3 | task -1 | saving idle slot to prompt cache",
+        "0.02.066.633 I slot get_availabl: id  0 | task -1 | selected slot by id (0)",
+        "0.02.066.739 I slot process_sing: id  1 | task -1 | saving idle slot to prompt cache",
+        "0.02.066.759 I srv   prompt_save:  - saving prompt with length 315, total state size = 34.457 MiB (draft: 0.000 MiB)",
+        "0.02.074.392 I srv        update:  - cache state: 2 prompts, 103.481 MiB (limits: 512.000 MiB, 2048 tokens, 4680 est)",
+        "0.02.074.397 I srv        update:    - prompt 000001FE2A3E66B0:     631 tokens, checkpoints:  0,    69.024 MiB",
+        "0.02.074.398 I srv        update:    - prompt 000001FE2A3E7280:     315 tokens, checkpoints:  0,    34.457 MiB",
+        "0.02.074.442 I slot process_sing: id  2 | task -1 | saving idle slot to prompt cache",
+        "0.02.074.444 I slot process_sing: id  3 | task -1 | saving idle slot to prompt cache",
+        "0.02.462.831 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.811 (> 0.100 thold), f_keep = 1.000",
+        "0.02.462.941 I slot process_sing: id  1 | task -1 | saving idle slot to prompt cache",
+        "0.02.462.946 I slot process_sing: id  2 | task -1 | saving idle slot to prompt cache",
+        "0.02.462.949 I slot process_sing: id  3 | task -1 | saving idle slot to prompt cache"
+      ]
+    },
+    "cache_idle_slots_on_unpinned": {
+      "name": "cache_idle_slots_on_unpinned",
+      "doc": "Same agent pattern without id_slot: after idle slot 0 is offloaded, can the next agent step restore its retained context from the host-RAM prompt cache?",
+      "config_overrides": {
+        "cache_ram_mib": 512,
+        "cache_idle_slots": true,
+        "extra_args": [
+          "-lv",
+          "4"
+        ]
+      },
+      "server_alive_at_end": true,
+      "server_exit_code_if_dead": null,
+      "health_at_end": {
+        "status": "ok"
+      },
+      "findings": {
+        "a_slot": 3,
+        "b_slot": 1,
+        "b_cached_tokens": 631
+      },
+      "requests": [
+        {
+          "label": "A: 600+32, no id_slot",
+          "prompt_tokens": 600,
+          "n_predict": 32,
+          "id_slot_requested": -1,
+          "t_send": 0.0,
+          "t_done": 0.344,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 631,
+            "tokens_evaluated": 600
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 3,
+            "prompt_tokens": 600,
+            "cached_tokens": 0,
+            "output_tokens": 32,
+            "prompt_ms": 120.454,
+            "predicted_ms": 213.198
+          }
+        },
+        {
+          "label": "X: unrelated 300+16, no id_slot (new task -> idle slots offloaded?)",
+          "prompt_tokens": 300,
+          "n_predict": 16,
+          "id_slot_requested": -1,
+          "t_send": 0.344,
+          "t_done": 0.516,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 315,
+            "tokens_evaluated": 300
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 2,
+            "prompt_tokens": 300,
+            "cached_tokens": 0,
+            "output_tokens": 16,
+            "prompt_ms": 58.69,
+            "predicted_ms": 104.191
+          }
+        },
+        {
+          "label": "B: extends A, no id_slot",
+          "prompt_tokens": 832,
+          "n_predict": 32,
+          "id_slot_requested": -1,
+          "t_send": 0.516,
+          "t_done": 0.813,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 863,
+            "tokens_evaluated": 832
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 1,
+            "prompt_tokens": 832,
+            "cached_tokens": 631,
+            "output_tokens": 32,
+            "prompt_ms": 45.015,
+            "predicted_ms": 218.253
+          }
+        }
+      ],
+      "notes": [
+        {
+          "label": "slots after X",
+          "t": 0.516,
+          "path": "/slots",
+          "value": [
+            {
+              "id": 0,
+              "n_ctx": 2048,
+              "is_processing": false
+            },
+            {
+              "id": 1,
+              "n_ctx": 2048,
+              "is_processing": false
+            },
+            {
+              "id": 2,
+              "n_ctx": 2048,
+              "is_processing": false,
+              "id_task": 33,
+              "n_prompt_tokens": 315
+            },
+            {
+              "id": 3,
+              "n_ctx": 2048,
+              "is_processing": false,
+              "id_task": 0,
+              "n_prompt_tokens": 0
+            }
+          ]
+        }
+      ],
+      "server_log_evidence": [
+        "0.00.372.109 I load: special tokens cache size = 256",
+        "0.00.390.711 I load: token to piece cache size = 0.7999 MB",
+        "0.01.186.308 I srv    load_model: prompt cache is enabled, size limit: 512 MiB",
+        "0.01.186.310 I srv    load_model: use `--cache-ram 0` to disable the prompt cache",
+        "0.01.186.329 I srv          init: idle slots will be saved to prompt cache and cleared upon starting a new task",
+        "0.01.548.180 I slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = -1",
+        "0.01.548.181 I srv  get_availabl: updating prompt cache",
+        "0.01.548.192 I srv          load:  - looking for better prompt, base f_keep = -1.000, f_sim = 0.000",
+        "0.01.548.195 I srv        update:  - cache state: 0 prompts, 0.000 MiB (limits: 512.000 MiB, 2048 tokens, 536870912 est)",
+        "0.01.548.196 I srv  get_availabl: prompt cache update took 0.01 ms",
+        "0.01.548.239 I slot process_sing: id  0 | task -1 | saving idle slot to prompt cache",
+        "0.01.548.243 I slot process_sing: id  1 | task -1 | saving idle slot to prompt cache",
+        "0.01.548.245 I slot process_sing: id  2 | task -1 | saving idle slot to prompt cache",
+        "0.01.885.094 I slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = -1",
+        "0.01.885.094 I srv  get_availabl: updating prompt cache",
+        "0.01.885.097 I srv          load:  - looking for better prompt, base f_keep = -1.000, f_sim = 0.000",
+        "0.01.885.100 I srv        update:  - cache state: 0 prompts, 0.000 MiB (limits: 512.000 MiB, 2048 tokens, 536870912 est)",
+        "0.01.885.101 I srv  get_availabl: prompt cache update took 0.01 ms",
+        "0.01.885.135 I slot process_sing: id  0 | task -1 | saving idle slot to prompt cache",
+        "0.01.885.140 I slot process_sing: id  1 | task -1 | saving idle slot to prompt cache",
+        "0.01.885.143 I slot process_sing: id  3 | task -1 | saving idle slot to prompt cache",
+        "0.01.885.188 I srv   prompt_save:  - saving prompt with length 631, total state size = 69.024 MiB (draft: 0.000 MiB)",
+        "0.01.898.478 I srv        update:  - cache state: 1 prompts, 69.024 MiB (limits: 512.000 MiB, 2048 tokens, 4680 est)",
+        "0.01.898.482 I srv        update:    - prompt 00000280A98AF180:     631 tokens, checkpoints:  0,    69.024 MiB",
+        "0.02.066.466 I slot get_availabl: id  1 | task -1 | selected slot by LRU, t_last = -1",
+        "0.02.066.466 I srv  get_availabl: updating prompt cache",
+        "0.02.066.468 I srv          load:  - looking for better prompt, base f_keep = -1.000, f_sim = 0.000",
+        "0.02.066.471 I srv          load:    - prompt with length     631, lcp =     631, f_keep = 1.000, f_sim = 0.758",
+        "0.02.066.472 I srv          load:  - found better prompt with f_keep = 1.000, f_sim = 0.758",
+        "0.02.076.876 I srv        update:  - cache state: 0 prompts, 0.000 MiB (limits: 512.000 MiB, 2048 tokens, 536870912 est)",
+        "0.02.076.881 I srv  get_availabl: prompt cache update took 10.41 ms",
+        "0.02.076.915 I slot process_sing: id  0 | task -1 | saving idle slot to prompt cache",
+        "0.02.076.920 I slot process_sing: id  2 | task -1 | saving idle slot to prompt cache",
+        "0.02.076.939 I srv   prompt_save:  - saving prompt with length 315, total state size = 34.457 MiB (draft: 0.000 MiB)",
+        "0.02.084.231 I srv        update:  - cache state: 1 prompts, 34.457 MiB (limits: 512.000 MiB, 2048 tokens, 4680 est)",
+        "0.02.084.235 I srv        update:    - prompt 00000280A98AFF00:     315 tokens, checkpoints:  0,    34.457 MiB",
+        "0.02.084.278 I slot process_sing: id  3 | task -1 | saving idle slot to prompt cache"
+      ]
+    },
+    "cache_idle_slots_off_cache_ram_on": {
+      "name": "cache_idle_slots_off_cache_ram_on",
+      "doc": "With --cache-idle-slots (+ --cache-ram), starting a new task offloads idle slots. Does the next agent step pinned to the offloaded slot still get cached tokens?",
+      "config_overrides": {
+        "cache_ram_mib": 512,
+        "cache_idle_slots": false,
+        "extra_args": [
+          "-lv",
+          "4"
+        ]
+      },
+      "server_alive_at_end": true,
+      "server_exit_code_if_dead": null,
+      "health_at_end": {
+        "status": "ok"
+      },
+      "findings": {
+        "b_cached_tokens": 631,
+        "c_cached_tokens": 863,
+        "c_slot": 0
+      },
+      "requests": [
+        {
+          "label": "A: 600+32 on slot 0",
+          "prompt_tokens": 600,
+          "n_predict": 32,
+          "id_slot_requested": 0,
+          "t_send": 0.0,
+          "t_done": 0.344,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 631,
+            "tokens_evaluated": 600
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 0,
+            "prompt_tokens": 600,
+            "cached_tokens": 0,
+            "output_tokens": 32,
+            "prompt_ms": 120.77,
+            "predicted_ms": 217.327
+          }
+        },
+        {
+          "label": "X: unrelated 300+16 on slot 1 (new task -> idle slot 0 offloaded?)",
+          "prompt_tokens": 300,
+          "n_predict": 16,
+          "id_slot_requested": 1,
+          "t_send": 0.344,
+          "t_done": 0.516,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 315,
+            "tokens_evaluated": 300
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 1,
+            "prompt_tokens": 300,
+            "cached_tokens": 0,
+            "output_tokens": 16,
+            "prompt_ms": 60.691,
+            "predicted_ms": 105.903
+          }
+        },
+        {
+          "label": "B: extends A, pinned to slot 0",
+          "prompt_tokens": 832,
+          "n_predict": 32,
+          "id_slot_requested": 0,
+          "t_send": 0.516,
+          "t_done": 0.797,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 863,
+            "tokens_evaluated": 832
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 0,
+            "prompt_tokens": 832,
+            "cached_tokens": 631,
+            "output_tokens": 32,
+            "prompt_ms": 48.069,
+            "predicted_ms": 226.222
+          }
+        },
+        {
+          "label": "C: extends B, no id_slot",
+          "prompt_tokens": 1064,
+          "n_predict": 16,
+          "id_slot_requested": -1,
+          "t_send": 0.797,
+          "t_done": 0.953,
+          "status": 200,
+          "response_meta": {
+            "stop_type": "limit",
+            "truncated": false,
+            "tokens_cached": 1079,
+            "tokens_evaluated": 1064
+          },
+          "outcome": {
+            "ok": true,
+            "id_slot": 0,
+            "prompt_tokens": 1064,
+            "cached_tokens": 863,
+            "output_tokens": 16,
+            "prompt_ms": 48.064,
+            "predicted_ms": 111.999
+          }
+        }
+      ],
+      "notes": [
+        {
+          "label": "slots after A",
+          "t": 0.344,
+          "path": "/slots",
+          "value": [
+            {
+              "id": 0,
+              "n_ctx": 2048,
+              "is_processing": false,
+              "id_task": 0,
+              "n_prompt_tokens": 631
+            },
+            {
+              "id": 1,
+              "n_ctx": 2048,
+              "is_processing": false
+            },
+            {
+              "id": 2,
+              "n_ctx": 2048,
+              "is_processing": false
+            },
+            {
+              "id": 3,
+              "n_ctx": 2048,
+              "is_processing": false
+            }
+          ]
+        },
+        {
+          "label": "slots after X",
+          "t": 0.516,
+          "path": "/slots",
+          "value": [
+            {
+              "id": 0,
+              "n_ctx": 2048,
+              "is_processing": false,
+              "id_task": 0,
+              "n_prompt_tokens": 631
+            },
+            {
+              "id": 1,
+              "n_ctx": 2048,
+              "is_processing": false,
+              "id_task": 34,
+              "n_prompt_tokens": 315
+            },
+            {
+              "id": 2,
+              "n_ctx": 2048,
+              "is_processing": false
+            },
+            {
+              "id": 3,
+              "n_ctx": 2048,
+              "is_processing": false
+            }
+          ]
+        }
+      ],
+      "server_log_evidence": [
+        "0.00.364.692 I load: special tokens cache size = 256",
+        "0.00.383.476 I load: token to piece cache size = 0.7999 MB",
+        "0.01.166.852 I srv    load_model: prompt cache is enabled, size limit: 512 MiB",
+        "0.01.166.854 I srv    load_model: use `--cache-ram 0` to disable the prompt cache",
+        "0.01.535.342 I slot get_availabl: id  0 | task -1 | selected slot by id (0)",
+        "0.01.878.562 I slot get_availabl: id  1 | task -1 | selected slot by id (1)",
+        "0.02.050.344 I slot get_availabl: id  0 | task -1 | selected slot by id (0)",
+        "0.02.328.535 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.811 (> 0.100 thold), f_keep = 1.000"
+      ]
+    }
+  }
+}

@@ -1,0 +1,66 @@
+0.00.080.772 I srv  llama_server: initializing ...
+0.00.080.779 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
+0.00.081.121 W srv  llama_server: security: no API key is set and CORS allows all origins (see https://github.com/ggml-org/llama.cpp/pull/25655)
+0.00.088.345 I srv    load_model: loading model 'C:/CSE291A/artifacts/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf'
+0.01.139.190 I cmn          init: llama threadpool init, n_threads = 12
+0.01.190.229 I srv    load_model: initializing, n_slots = 4, n_ctx_slot = 2048, kv_unified = 'true'
+0.01.197.081 I srv  llama_server: model loaded
+0.01.197.087 I srv  llama_server: listening on http://127.0.0.1:8091
+0.01.535.070 I slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = -1
+0.01.535.096 I slot launch_slot_: id  3 | task 0 | processing task, is_child = 0
+0.01.535.108 E srv    send_error: task id = 0, error: request (2100 tokens) exceeds the available context size (2048 tokens), try increasing it
+0.01.535.114 I slot      release: id  3 | task 0 | stop processing: n_tokens = 0, truncated = 0
+0.01.535.121 W srv          stop: cancel task, id_task = 0
+0.01.539.406 I slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = -1
+0.01.539.423 I slot launch_slot_: id  2 | task 3 | processing task, is_child = 0
+0.01.539.428 E srv    send_error: task id = 3, error: request (2048 tokens) exceeds the available context size (2048 tokens), try increasing it
+0.01.539.432 I slot      release: id  2 | task 3 | stop processing: n_tokens = 0, truncated = 0
+0.01.539.442 W srv          stop: cancel task, id_task = 3
+0.01.544.178 I slot get_availabl: id  1 | task -1 | selected slot by LRU, t_last = -1
+0.01.544.194 I slot launch_slot_: id  1 | task 6 | processing task, is_child = 0
+0.02.958.678 I slot print_timing: id  1 | task 6 | prompt eval time =     356.46 ms /  1900 tokens (    0.19 ms per token,  5330.21 tokens per second)
+0.02.958.683 I slot print_timing: id  1 | task 6 |        eval time =    1058.01 ms /   148 tokens (    7.20 ms per token,   138.94 tokens per second)
+0.02.958.684 I slot print_timing: id  1 | task 6 |       total time =    1414.47 ms /  2048 tokens
+0.02.958.685 I slot print_timing: id  1 | task 6 |    graphs reused =        147
+0.02.958.686 I slot print_timing: id  1 | task 6 |   graph reallocs =          0    /     0        (same size) / (changed size)
+0.02.958.829 I slot      release: id  1 | task 6 | stop processing: n_tokens = 2047, truncated = 1
+0.02.969.770 I slot get_availabl: id  0 | task -1 | selected slot by id (0)
+0.02.969.808 I slot launch_slot_: id  0 | task 155 | processing task, is_child = 0
+0.02.969.977 W decode: failed to find a memory slot for batch of size 100
+0.02.970.008 W srv  try_clear_id: purging slot 1 with 2047 tokens
+0.02.970.428 W srv        decode: failed to find free space in the KV cache, retrying with smaller batch size, off = 0, n_batch = 2048, ret = 1
+0.02.997.952 I slot get_availabl: id  1 | task -1 | selected slot by id (1)
+0.02.998.014 I slot launch_slot_: id  1 | task 157 | processing task, is_child = 0
+0.02.998.018 I slot get_availabl: id  2 | task -1 | selected slot by id (2)
+0.02.998.030 I slot launch_slot_: id  2 | task 158 | processing task, is_child = 0
+0.02.998.031 I slot get_availabl: id  3 | task -1 | selected slot by id (3)
+0.02.998.039 I slot launch_slot_: id  3 | task 159 | processing task, is_child = 0
+0.05.947.571 I slot print_timing: id  0 | task 155 | prompt eval time =      28.12 ms /   100 tokens (    0.28 ms per token,  3555.93 tokens per second)
+0.05.947.576 I slot print_timing: id  0 | task 155 |        eval time =    2949.62 ms /   300 tokens (    9.86 ms per token,   101.37 tokens per second)
+0.05.947.577 I slot print_timing: id  0 | task 155 |       total time =    2977.75 ms /   400 tokens
+0.05.947.578 I slot print_timing: id  0 | task 155 |    graphs reused =        439
+0.05.947.579 I slot print_timing: id  0 | task 155 |   graph reallocs =          0    /     0        (same size) / (changed size)
+0.05.947.606 I slot      release: id  0 | task 155 | stop processing: n_tokens = 399, truncated = 0
+0.05.948.031 I slot get_availabl: id  0 | task -1 | selected slot by LRU, t_last = 5869318
+0.05.948.179 I slot launch_slot_: id  0 | task 174 | processing task, is_child = 0
+0.05.948.209 E srv    send_error: task id = 174, error: request (2100 tokens) exceeds the available context size (2048 tokens), try increasing it
+0.05.948.222 I slot      release: id  0 | task 174 | stop processing: n_tokens = 399, truncated = 0
+0.05.948.231 W srv          stop: cancel task, id_task = 174
+0.05.958.199 I slot print_timing: id  1 | task 157 | prompt eval time =      58.27 ms /   100 tokens (    0.58 ms per token,  1716.27 tokens per second)
+0.05.958.204 I slot print_timing: id  1 | task 157 |        eval time =    2901.88 ms /   300 tokens (    9.71 ms per token,   103.04 tokens per second)
+0.05.958.205 I slot print_timing: id  1 | task 157 |       total time =    2960.15 ms /   400 tokens
+0.05.958.206 I slot print_timing: id  1 | task 157 |    graphs reused =        439
+0.05.958.207 I slot print_timing: id  1 | task 157 |   graph reallocs =          0    /     0        (same size) / (changed size)
+0.05.958.226 I slot      release: id  1 | task 157 | stop processing: n_tokens = 399, truncated = 0
+0.05.958.380 I slot print_timing: id  2 | task 158 | prompt eval time =      58.56 ms /   100 tokens (    0.59 ms per token,  1707.71 tokens per second)
+0.05.958.383 I slot print_timing: id  2 | task 158 |        eval time =    2901.76 ms /   300 tokens (    9.70 ms per token,   103.04 tokens per second)
+0.05.958.384 I slot print_timing: id  2 | task 158 |       total time =    2960.32 ms /   400 tokens
+0.05.958.384 I slot print_timing: id  2 | task 158 |    graphs reused =        439
+0.05.958.385 I slot print_timing: id  2 | task 158 |   graph reallocs =          0    /     0        (same size) / (changed size)
+0.05.958.401 I slot      release: id  2 | task 158 | stop processing: n_tokens = 399, truncated = 0
+0.05.958.549 I slot print_timing: id  3 | task 159 | prompt eval time =      58.85 ms /   100 tokens (    0.59 ms per token,  1699.32 tokens per second)
+0.05.958.553 I slot print_timing: id  3 | task 159 |        eval time =    2901.62 ms /   300 tokens (    9.70 ms per token,   103.05 tokens per second)
+0.05.958.554 I slot print_timing: id  3 | task 159 |       total time =    2960.47 ms /   400 tokens
+0.05.958.555 I slot print_timing: id  3 | task 159 |    graphs reused =        439
+0.05.958.555 I slot print_timing: id  3 | task 159 |   graph reallocs =          0    /     0        (same size) / (changed size)
+0.05.958.569 I slot      release: id  3 | task 159 | stop processing: n_tokens = 399, truncated = 0
