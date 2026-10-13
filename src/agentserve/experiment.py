@@ -20,6 +20,16 @@ def load_config(path: Path) -> dict[str, Any]:
         return tomllib.load(f)
 
 
+def simulated_runtime(clock: Clock, runtime_cfg: dict[str, Any]) -> SimulatedRuntime:
+    """The simulated runtime a ``[runtime]`` table with ``kind = "simulated"`` describes."""
+    return SimulatedRuntime(clock, n_slots=runtime_cfg["n_slots"],
+                            pool_tokens=runtime_cfg["memory_budget_tokens"],
+                            prompt_token_s=runtime_cfg["prompt_token_s"],
+                            output_token_s=runtime_cfg["output_token_s"],
+                            cache_ram_tokens=runtime_cfg.get("cache_ram_tokens", 0),
+                            cache_idle_slots=runtime_cfg.get("cache_idle_slots", False))
+
+
 def run_experiment(config: dict[str, Any], run_dir: Path, *,
                    unloaded_cache_dir: Path | None = None) -> None:
     run, runtime_cfg, policy_cfg = config["run"], config["runtime"], config["policy"]
@@ -33,12 +43,7 @@ def run_experiment(config: dict[str, Any], run_dir: Path, *,
     workload = WorkloadConfig.from_config(config["workload"])
     tasks = generate(workload, duration_s=run["duration_s"], seed=run["seed"],
                      split=run.get("split", "dev"))
-    runtime = SimulatedRuntime(clock, n_slots=runtime_cfg["n_slots"],
-                               pool_tokens=runtime_cfg["memory_budget_tokens"],
-                               prompt_token_s=runtime_cfg["prompt_token_s"],
-                               output_token_s=runtime_cfg["output_token_s"],
-                               cache_ram_tokens=runtime_cfg.get("cache_ram_tokens", 0),
-                               cache_idle_slots=runtime_cfg.get("cache_idle_slots", False))
+    runtime = simulated_runtime(clock, runtime_cfg)
     recorder = Recorder(run_dir, config, record_prompts=run.get("record_prompts", False))
     try:
         # Unloaded completion times, task SLOs and hard timeouts (by task_id).
@@ -67,9 +72,7 @@ def _unloaded(config: dict[str, Any], tasks, cache_dir: Path | None,
 
     def measure() -> list[unloaded.UnloadedRecord]:
         clock = VirtualClock()
-        runtime = SimulatedRuntime(clock, n_slots=runtime_cfg["n_slots"],
-                                   prompt_token_s=runtime_cfg["prompt_token_s"],
-                                   output_token_s=runtime_cfg["output_token_s"])
+        runtime = simulated_runtime(clock, runtime_cfg)
         return unloaded.measure(tasks, clock=clock, runtime=runtime,
                                 memory_budget_tokens=runtime_cfg["memory_budget_tokens"],
                                 n_slots=runtime_cfg["n_slots"])
