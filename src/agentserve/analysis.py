@@ -53,6 +53,8 @@ class RunAnalysis:
     run_dir: Path
     config: dict
     metrics: Metrics
+    classes: dict[str, Metrics]
+    """The same task-level metrics for each task class, over the same window."""
 
     def format(self) -> str:
         return "\n".join(f"{name}: {_fmt(value)}" for name, value in self.metrics.items())
@@ -69,16 +71,27 @@ def summarize(run_dir: Path, window: MetricWindow = MetricWindow()) -> RunAnalys
     span_s = end_s - window.start_s
     slos = _task_slos(run_dir)
 
+    fits = fittable_classes(config)
     m: Metrics = {}
     m.update(_task_metrics(tasks, slos, span_s))
-    m.update(_fittable_goodput(tasks, fittable_classes(config), slos, span_s))
+    m.update(_fittable_goodput(tasks, fits, slos, span_s))
     m.update(_queueing(requests))
     m.update(_failures(tasks))
     m.update(_memory([s for s in _read_jsonl(run_dir / SAMPLES_FILE) if window.contains(s["t_s"])]))
     m.update(_cached_tokens(requests))
     m.update(_policy_overhead(
         [d for d in _read_jsonl(run_dir / DECISIONS_FILE) if window.contains(d["t_s"])]))
-    return RunAnalysis(run_dir, config, m)
+
+    classes: dict[str, Metrics] = {}
+    for name in sorted({t["task_class"] for t in tasks}):
+        of_class = [t for t in tasks if t["task_class"] == name]
+        ids = {t["task_id"] for t in of_class}
+        c = _task_metrics(of_class, slos, span_s)
+        c.update(_queueing([r for r in requests if r["task_id"] in ids]))
+        c.update(_failures(of_class))
+        c["fits_budget"] = math.nan if fits is None else int(name in fits)
+        classes[name] = c
+    return RunAnalysis(run_dir, config, m, classes)
 
 
 def fittable_classes(config: dict) -> set[str] | None:

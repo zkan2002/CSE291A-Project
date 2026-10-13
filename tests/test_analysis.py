@@ -230,3 +230,82 @@ def test_restricted_goodput_is_nan_when_the_config_does_not_give_the_classes(tmp
     m = analyze(run_dir, capsys)
 
     assert math.isnan(m["goodput_fittable_tasks_per_min"])
+
+
+def test_a_metric_window_measures_only_agent_tasks_arriving_inside_it(tmp_path, capsys):
+    run_dir = tmp_path / "run"
+    write_run(run_dir, [
+        task(0, 0.0, 5.0),                               # warm-up: recorded, not measured
+        task(1, 10.0, 20.0),
+        task(2, 20.0, 50.0),                             # completes after the window: measured
+        task(3, 30.0, 35.0, failure="pool_exhausted"),
+        task(4, 40.0, 45.0),                             # arrives at the window's end: not measured
+    ])
+    write_jsonl(run_dir / "requests.jsonl", [
+        request(0, 0, 0.0, 4.0, 5.0), request(1, 0, 10.0, 11.0, 20.0),
+        request(2, 0, 20.0, 23.0, 50.0), request(4, 0, 40.0, 44.0, 45.0)])
+    write_jsonl(run_dir / "samples.jsonl", [
+        sample(5.0, 9000, 900), sample(15.0, 4000, 400), sample(39.0, 5000, 500),
+        sample(40.0, 9000, 900)])
+    write_jsonl(run_dir / "decisions.jsonl", [
+        decision(0.0, 1e-3), decision(10.0, 10e-6), decision(20.0, 30e-6), decision(41.0, 1e-3)])
+
+    m = analyze(run_dir, capsys, MetricWindow(start_s=10.0, end_s=40.0))
+
+    assert m["agent_tasks"] == 3
+    assert m["failed_tasks"] == 1
+    # 2 completed agent tasks over the 30 s window
+    assert m["throughput_tasks_per_min"] == pytest.approx(4.0)
+    assert m["completion_latency_p50_s"] == pytest.approx(20.0)
+    assert m["queueing_mean_s"] == pytest.approx(2.0)
+    assert m["peak_vram_mib"] == pytest.approx(5000)
+    assert m["peak_host_ram_mib"] == pytest.approx(500)
+    assert m["policy_overhead_mean_us"] == pytest.approx(20)
+
+
+def test_the_default_window_measures_the_whole_run_up_to_the_last_completion(tmp_path, capsys):
+    run_dir = tmp_path / "run"
+    write_run(run_dir, [task(0, 0.0, 5.0), task(1, 50.0, 60.0)])
+
+    m = analyze(run_dir, capsys)
+
+    assert m["agent_tasks"] == 2
+    assert m["throughput_tasks_per_min"] == pytest.approx(2.0)
+
+
+def test_metrics_are_broken_down_by_task_class(tmp_path):
+    run_dir = tmp_path / "run"
+    write_run(run_dir, [
+        task(0, 0.0, 10.0, task_class="small"),
+        task(1, 10.0, 30.0, task_class="small"),     # late
+        task(2, 20.0, 50.0, task_class="huge"),
+        task(3, 30.0, 31.0, failure="exceeds_context", task_class="huge"),
+        task(4, 40.0, 60.0, task_class="huge"),
+    ], config={"workload": {"arrival_rate_per_s": 1.0, "classes": CLASSES},
+               "runtime": {"memory_budget_tokens": 1000}})
+    write_unloaded(run_dir, {0: 15.0, 1: 15.0, 2: 60.0, 3: 60.0, 4: 60.0})
+    write_jsonl(run_dir / "requests.jsonl", [
+        request(0, 0, 0.0, 1.0, 10.0), request(1, 0, 10.0, 13.0, 30.0),
+        request(2, 0, 20.0, 20.0, 50.0), request(4, 0, 40.0, 50.0, 60.0)])
+
+    classes = summarize(run_dir).classes
+
+    assert sorted(classes) == ["huge", "small"]
+    small, huge = classes["small"], classes["huge"]
+    # rates are over the whole run's 60 s window
+    assert small["agent_tasks"] == 2
+    assert small["throughput_tasks_per_min"] == pytest.approx(2.0)
+    assert small["goodput_tasks_per_min"] == pytest.approx(1.0)
+    assert small["slo_attainment"] == pytest.approx(0.5)
+    assert small["completion_latency_p50_s"] == pytest.approx(15.0)
+    assert small["queueing_mean_s"] == pytest.approx(2.0)
+    assert small["failure_rate"] == 0.0
+    assert small["fits_budget"] == 1
+    assert huge["agent_tasks"] == 3
+    assert huge["failed_tasks"] == 1
+    assert huge["goodput_tasks_per_min"] == pytest.approx(2.0)
+    assert huge["slo_attainment"] == pytest.approx(2 / 3)
+    assert huge["completion_latency_p95_s"] == pytest.approx(29.5)
+    assert huge["queueing_mean_s"] == pytest.approx(5.0)
+    assert huge["failure_rate.exceeds_context"] == pytest.approx(1 / 3)
+    assert huge["fits_budget"] == 0
