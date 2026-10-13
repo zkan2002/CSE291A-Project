@@ -29,3 +29,5 @@ n_slots = 4
 memory_budget_tokens = 32768  # KV-pool token capacity (ADR-0001)
 prompt_token_s = 0.0002       # simulated prompt processing time per uncached token
 output_token_s = 0.01         # simulated decode time per output token
+cache_ram_tokens = 0          # host-RAM prompt cache (--cache-ram) in tokens; 0 = off
+cache_idle_slots = false      # --cache-idle-slots: offload idle slots to host RAM (needs cache_ram_tokens)

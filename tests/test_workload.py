@@ -36,7 +36,7 @@ concurrency = 4
 [runtime]
 kind = "simulated"
 n_slots = 4
-memory_budget_tokens = 32768
+memory_budget_tokens = 131072  # 4 long agent tasks (~11k tokens each) never fill it
 prompt_token_s = 0.0002
 output_token_s = 0.01
 """

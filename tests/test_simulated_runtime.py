@@ -7,9 +7,11 @@ runtime exposes. The contract is spec #1's, as amended by the pilot
 """
 
 import asyncio
+import json
 
 import pytest
 
+from agentserve.cli import main
 from agentserve.clock import VirtualClock
 from agentserve.runtime import ExceedsContext, ModelRequest, PoolExhausted
 from agentserve.simulated import SimulatedRuntime
@@ -371,6 +373,74 @@ def test_kv_occupancy_grows_with_the_prompt_and_then_one_token_per_generated_out
 
     seen, final = run(scenario)
 
-    # mid-prompt the batch is already allocated; then 50 outputs in, 49 are in KV
+    # an iteration takes its KV cells when it starts: the whole prompt batch at
+    # once, then one cell per decode iteration (50 started by t = 1.005)
     assert seen == [500, 500, 550]
     assert final == 599
+
+
+def test_a_request_arriving_mid_generation_starts_at_the_next_iteration():
+    async def scenario(clock, runtime):
+        return await asyncio.gather(
+            at(clock, 0.0, runtime.submit(ModelRequest(tokens(100, 10_000), 200, slot=0))),
+            at(clock, 0.555, runtime.submit(ModelRequest(tokens(100, 20_000), 10, slot=1))))
+
+    _, (late, late_done) = run(scenario)
+
+    # slot 0 decodes one token per 10 ms from t = 0.11; the next iteration
+    # starts at 0.56 and carries the late prompt, then 9 more decode iterations
+    assert late_done == pytest.approx(0.56 + 100 * PROMPT_TOKEN_S + 10 * OUTPUT_TOKEN_S)
+
+
+# --- through a whole experiment ---------------------------------------------------
+
+EXPERIMENT = """\
+[run]
+seed = 1
+duration_s = 30
+
+[workload]
+arrival_rate_per_s = 0.3
+
+[[workload.classes]]
+name = "short"
+weight = 1.0
+initial_context_tokens = 500
+output_tokens = 50
+steps = 3
+tool_result_tokens = 200
+tool_delay_median_s = 1.0
+tool_delay_sigma = 0.5
+
+[policy]
+name = "task_level_fifo"
+concurrency = 2
+
+[runtime]
+kind = "simulated"
+n_slots = 4
+memory_budget_tokens = 8192
+prompt_token_s = 0.0002
+output_token_s = 0.01
+cache_ram_tokens = 65536
+cache_idle_slots = {cache_idle_slots}
+"""
+
+
+def cached_tokens_of_later_steps(tmp_path, *, cache_idle_slots: bool) -> list[int]:
+    config = tmp_path / f"config-{cache_idle_slots}.toml"
+    config.write_text(EXPERIMENT.format(cache_idle_slots=str(cache_idle_slots).lower()))
+    run_dir = tmp_path / f"run-{cache_idle_slots}"
+    assert main(["run", str(config), "--out", str(run_dir)]) == 0
+    requests = [json.loads(line) for line in (run_dir / "requests.jsonl").read_text().splitlines()]
+    assert requests and all(r["error"] is None for r in requests)
+    return [r["n_cached_tokens"] for r in requests if r["step"] > 0]
+
+
+def test_an_experiment_configures_the_cache_policy_of_the_simulated_runtime(tmp_path):
+    # task-level FIFO pins each agent task to a slot with id_slot
+    resident = cached_tokens_of_later_steps(tmp_path, cache_idle_slots=False)
+    offload = cached_tokens_of_later_steps(tmp_path, cache_idle_slots=True)
+
+    assert all(n > 0 for n in resident)
+    assert any(n == 0 for n in offload)

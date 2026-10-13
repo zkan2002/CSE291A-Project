@@ -31,7 +31,9 @@ def run_experiment(config: dict[str, Any], run_dir: Path) -> None:
     runtime = SimulatedRuntime(clock, n_slots=runtime_cfg["n_slots"],
                                pool_tokens=runtime_cfg["memory_budget_tokens"],
                                prompt_token_s=runtime_cfg["prompt_token_s"],
-                               output_token_s=runtime_cfg["output_token_s"])
+                               output_token_s=runtime_cfg["output_token_s"],
+                               cache_ram_tokens=runtime_cfg.get("cache_ram_tokens", 0),
+                               cache_idle_slots=runtime_cfg.get("cache_idle_slots", False))
     recorder = Recorder(run_dir, config, record_prompts=run.get("record_prompts", False))
     try:
         proxy = Proxy(policy=build_policy(policy_cfg["name"], concurrency=policy_cfg["concurrency"]),

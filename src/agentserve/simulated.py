@@ -4,24 +4,44 @@ It models llama-server b11606 launched with ``--kv-unified -c POOL -np N`` as
 spec #1's contract describes it, amended by the pilot
 (docs/pilot/pilot-findings.md). The server is an iteration loop; so is this:
 
-- Each iteration first starts queued model requests on slots, then builds one
-  batch: one decode token per generating slot, then prompt chunks (up to
-  ``n_batch`` tokens in all) for slots still processing their prompt.
-- The batch must fit in the pool's free KV cells. If it doesn't, idle slots that
-  hold tokens are purged one per retry, first in index order. If no such slot is
-  left, every running model request fails with ``PoolExhausted`` and its KV is
-  cleared; queued ones are unaffected.
+- Each iteration first starts queued model requests on idle slots, in arrival
+  order. A request pinned (``id_slot``) to a busy slot waits for that slot. An
+  unpinned one takes the idle slot holding the longest common prefix, if that
+  prefix is strictly more than ``similarity`` of its prompt, else the least
+  recently used idle slot (ties to the highest index).
+- A prompt of ``POOL`` tokens or more is rejected with ``ExceedsContext`` only
+  when it reaches a slot. A prompt that fits but leaves fewer than ``n_predict``
+  cells stops early (the server's HTTP 200 ``truncated``) and is reported as
+  ``ExceedsContext``, as the real adapter reports it.
+- One batch per iteration: a decode token per generating slot, then prompt
+  chunks (``n_batch`` tokens in all). If it doesn't fit in the free cells, idle
+  slots holding tokens are purged one per retry, first in index order, KV
+  discarded. If none is left, every running model request fails at once with
+  ``PoolExhausted`` and its KV is cleared; queued ones are unaffected.
 - An iteration takes ``prompt_token_s`` per prompt token in the batch, plus
   ``output_token_s`` if it samples any output token.
 
 KV bookkeeping follows the server: after a model request with prompt ``P`` and
 ``n`` outputs, its slot holds ``P + n - 1`` tokens (the last sampled token is
 never decoded). The next request on that slot reuses the longest common prefix.
-"""
 
+Cache policies (pilot amendment 6) map to the server flags:
+
+- ``cache_ram_tokens`` is ``--cache-ram`` in tokens (0 = off). With it on, an
+  unpinned request that takes a slot by LRU, or by a prefix keeping less than
+  half the slot's tokens, saves the slot's prompt to host RAM and restores the
+  best-matching saved prompt into the slot. The ``id_slot`` path never does.
+- ``cache_idle_slots`` (needs ``cache_ram_tokens``): whenever a request starts,
+  every other idle slot's KV is moved to host RAM. Resident = off + pinned
+  agent steps; offload = on + unpinned agent steps.
+
+The server does not report KV occupancy (pilot amendment 7); this runtime
+exposes its own as ``kv_tokens``, ``slot_kv_tokens`` and ``ram_cache_tokens``.
+"""
 from __future__ import annotations
 
 import asyncio
+import math
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -77,18 +97,29 @@ class SimulatedRuntime:
         self._slots = [_Slot(i) for i in range(n_slots)]
         self._queue: deque[_Job] = deque()
         self._engine: asyncio.Task[None] | None = None
+        self._wake = asyncio.Event()
+        self._span: tuple[float, int, list[_Job]] | None = None
+        """(start, iterations, jobs) of a decode span in progress: its KV cells are
+        written when it ends, so occupancy adds the iterations started so far."""
 
     # --- observable KV state ------------------------------------------------
 
     @property
     def kv_tokens(self) -> int:
         """Tokens currently held in the shared KV pool, over all slots."""
-        return sum(len(s.kv) for s in self._slots)
+        return sum(self.slot_kv_tokens)
 
     @property
     def slot_kv_tokens(self) -> tuple[int, ...]:
         """Tokens each slot currently holds in the KV pool, by slot index."""
-        return tuple(len(s.kv) for s in self._slots)
+        held = [len(s.kv) for s in self._slots]
+        if self._span is not None:
+            start, k, jobs = self._span
+            started = min(k, math.floor((self._clock.now() - start) / self._output_token_s
+                                        + 1e-9) + 1)
+            for job in jobs:
+                held[job.slot.index] += started
+        return tuple(held)
 
     @property
     def ram_cache_tokens(self) -> int:
@@ -100,6 +131,7 @@ class SimulatedRuntime:
     async def submit(self, request: ModelRequest) -> Completion:
         job = _Job(request, asyncio.get_running_loop().create_future())
         self._queue.append(job)
+        self._wake.set()
         if self._engine is None or self._engine.done():
             self._engine = asyncio.create_task(self._run())
         return await job.future
@@ -203,6 +235,8 @@ class SimulatedRuntime:
                 chunks.append((job, n))
                 budget -= n
 
+        if not chunks and len(decoding) and await self._decode_span(decoding):
+            return
         if not self._make_room(len(decoding) + sum(n for _, n in chunks)):
             self._fail_all(running)
             return
@@ -223,6 +257,38 @@ class SimulatedRuntime:
         for job in running:
             if len(job.outputs) >= job.n_target:
                 self._finish(job)
+
+    async def _decode_span(self, decoding: list[_Job]) -> bool:
+        """Run consecutive decode-only iterations as one clock sleep, until the
+        first model request finishes or the pool needs room. A ``submit`` cuts the
+        span short at the end of the iteration in progress, so the new request
+        starts exactly when it would have. Returns False if a span isn't worth it."""
+        free = self._pool_tokens - self.kv_tokens
+        k = min(min(j.n_target - len(j.outputs) for j in decoding), free // len(decoding))
+        if k < 2:
+            return False
+        step = self._output_token_s
+        start = self._clock.now()
+        self._span = (start, k, decoding)
+        self._wake.clear()
+        sleeper = asyncio.ensure_future(self._clock.sleep(k * step))
+        waker = asyncio.ensure_future(self._wake.wait())
+        await asyncio.wait({sleeper, waker}, return_when=asyncio.FIRST_COMPLETED)
+        n = k
+        if not sleeper.done():
+            sleeper.cancel()
+            n = min(k, max(1, math.ceil((self._clock.now() - start) / step - 1e-9)))
+            await self._clock.sleep(start + n * step - self._clock.now())
+        waker.cancel()
+        self._span = None
+        for job in decoding:
+            for _ in range(n):
+                job.slot.kv.append(job.outputs[-1])
+                job.outputs.append(self._next_output(job))
+        for job in decoding:
+            if len(job.outputs) >= job.n_target:
+                self._finish(job)
+        return True
 
     def _make_room(self, n_cells: int) -> bool:
         """Free ``n_cells`` KV cells by deleting idle slots' KV, one slot per retry,
