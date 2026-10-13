@@ -9,6 +9,7 @@ ends the agent task as a failed task.
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 
 from agentserve.clock import Clock
@@ -97,6 +98,7 @@ class Proxy:
     def _schedule(self) -> None:
         if not self._waiting:
             return
+        decision_started = time.perf_counter()  # policy overhead: wall time, not the run clock
         state = ProxyState(
             now_s=self._clock.now(),
             pending=tuple(w.pending for w in self._waiting),
@@ -105,8 +107,11 @@ class Proxy:
             memory_budget_tokens=self._memory_budget_tokens,
             n_slots=self._n_slots,
         )
+        admissions = self._policy.decide(state)
+        self._recorder.decision(t_s=state.now_s, decision_s=time.perf_counter() - decision_started,
+                                n_pending=len(state.pending), n_admitted=len(admissions))
         by_ref = {w.pending.ref: w for w in self._waiting}
-        for admission in self._policy.decide(state):
+        for admission in admissions:
             waiting = by_ref.pop(admission.ref)
             self._waiting.remove(waiting)
             p = waiting.pending
