@@ -26,7 +26,7 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from agentserve.clock import Clock
-from agentserve.runtime import Completion, ModelRequest
+from agentserve.runtime import Completion, ExceedsContext, ModelRequest, PoolExhausted
 
 _FIRST_OUTPUT_TOKEN = 1_000
 
@@ -48,6 +48,8 @@ class _Job:
     n_done: int = 0
     """Prompt tokens already in the slot's KV."""
     outputs: list[int] = field(default_factory=list)
+    n_target: int = 0
+    """Outputs it will generate: ``n_predict``, or fewer if the pool's context runs out."""
 
     @property
     def prompt(self) -> tuple[int, ...]:
@@ -109,6 +111,11 @@ class SimulatedRuntime:
             if slot is None:
                 continue
             self._queue.remove(job)
+            if len(job.prompt) >= self._pool_tokens:  # checked only once it reaches a slot
+                job.future.set_exception(ExceedsContext(
+                    f"request ({len(job.prompt)} tokens) exceeds the available context size "
+                    f"({self._pool_tokens} tokens)"))
+                continue
             self._start(job, slot)
 
     def _pick_slot(self, request: ModelRequest) -> _Slot | None:
@@ -137,6 +144,7 @@ class SimulatedRuntime:
         del slot.kv[n_cached:]
         slot.job, job.slot = job, slot
         job.n_cached = job.n_done = n_cached
+        job.n_target = min(job.request.n_predict, self._pool_tokens - len(job.prompt))
 
     async def _iterate(self, running: list[_Job]) -> None:
         decoding = [j for j in running if not j.in_prompt]
@@ -148,6 +156,9 @@ class SimulatedRuntime:
                 chunks.append((job, n))
                 budget -= n
 
+        if not self._make_room(len(decoding) + sum(n for _, n in chunks)):
+            self._fail_all(running)
+            return
         for job in decoding:
             job.slot.kv.append(job.outputs[-1])
             job.outputs.append(self._next_output(job))
@@ -163,8 +174,26 @@ class SimulatedRuntime:
         await self._clock.sleep(n_prompt * self._prompt_token_s
                                 + (self._output_token_s if samples else 0.0))
         for job in running:
-            if len(job.outputs) >= job.request.n_predict:
+            if len(job.outputs) >= job.n_target:
                 self._finish(job)
+
+    def _make_room(self, n_cells: int) -> bool:
+        """Free ``n_cells`` KV cells by deleting idle slots' KV, one slot per retry,
+        first in index order. The deleted KV is discarded, never saved."""
+        while self._pool_tokens - self.kv_tokens < n_cells:
+            victim = next((s for s in self._slots if s.job is None and s.kv), None)
+            if victim is None:
+                return False
+            victim.kv.clear()
+        return True
+
+    def _fail_all(self, running: list[_Job]) -> None:
+        for job in running:
+            slot = job.slot
+            slot.kv.clear()
+            slot.job = None
+            slot.t_last_used = self._clock.now()
+            job.future.set_exception(PoolExhausted("Context size has been exceeded."))
 
     def _next_output(self, job: _Job) -> int:
         return _FIRST_OUTPUT_TOKEN + len(job.outputs)
@@ -173,6 +202,13 @@ class SimulatedRuntime:
         slot = job.slot
         slot.job = None
         slot.t_last_used = self._clock.now()
+        if len(job.outputs) < job.request.n_predict:
+            # llama-server answers HTTP 200 with ``truncated: true``; the adapter
+            # reports that as exceeds_context, and so do we
+            job.future.set_exception(ExceedsContext(
+                f"output truncated at {len(job.outputs)} of {job.request.n_predict} tokens: "
+                f"prompt + n_predict exceeds the context size ({self._pool_tokens} tokens)"))
+            return
         n_uncached = len(job.prompt) - job.n_cached
         job.future.set_result(Completion(
             output_tokens=tuple(job.outputs), n_prompt_tokens=len(job.prompt),

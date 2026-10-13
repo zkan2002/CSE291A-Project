@@ -145,3 +145,102 @@ def test_least_recently_used_ties_go_to_the_highest_slot_index():
     first, second = run(scenario, n_slots=4)
 
     assert (first.slot, second.slot) == (3, 2)
+
+
+# --- context limits -----------------------------------------------------------
+
+
+@pytest.mark.parametrize("n_prompt", [2048, 2100])
+def test_a_prompt_that_fills_the_whole_pool_is_rejected(n_prompt):
+    async def scenario(clock, runtime):
+        return await outcome(runtime, ModelRequest(tokens(n_prompt, 10_000), 10))
+
+    assert isinstance(run(scenario, pool_tokens=2048), ExceedsContext)
+
+
+def test_an_oversize_prompt_is_rejected_only_once_it_reaches_a_slot():
+    async def scenario(clock, runtime):
+        busy = [at(clock, 0.0, runtime.submit(ModelRequest(tokens(100, 10_000 * (i + 1)), 200)))
+                for i in range(4)]
+        oversize = at(clock, 0.5, outcome(runtime, ModelRequest(tokens(2100, 90_000), 10)))
+        return await asyncio.gather(*busy, oversize)
+
+    *busy, (error, rejected_at) = run(scenario, n_slots=4, pool_tokens=2048)
+
+    assert isinstance(error, ExceedsContext)
+    assert rejected_at == pytest.approx(min(t for _, t in busy))
+
+
+def test_a_prompt_that_fits_but_leaves_too_little_room_for_its_outputs_fails_as_truncated():
+    # the server returns HTTP 200 with fewer outputs (truncated); the adapter
+    # reports that as exceeds_context, and so does the simulated runtime
+    async def scenario(clock, runtime):
+        started = clock.now()
+        error = await outcome(runtime, ModelRequest(tokens(1900, 10_000), 300, slot=0))
+        return error, clock.now() - started, runtime.slot_kv_tokens[0]
+
+    error, elapsed, kv = run(scenario, pool_tokens=2048)
+
+    assert isinstance(error, ExceedsContext)
+    # it generated 2048 - 1900 = 148 tokens before stopping, and keeps them in its slot
+    assert elapsed == pytest.approx(1900 * PROMPT_TOKEN_S + 148 * OUTPUT_TOKEN_S)
+    assert kv == 1900 + 148 - 1
+
+
+# --- a full pool ----------------------------------------------------------------
+
+
+def test_a_full_pool_deletes_the_first_idle_slot_in_index_order_not_the_least_recently_used():
+    # the pilot's idle_slot_deletion probe: fill slots 2, 1, 0 (slot 2 is the
+    # least recently used), then send slot 3 more than the free space
+    prompts = {s: tokens(500, 10_000 * (s + 1)) for s in range(4)}
+    prompts[3] = tokens(700, 40_000)
+
+    async def scenario(clock, runtime):
+        for s in (2, 1, 0):
+            await runtime.submit(ModelRequest(prompts[s], 8, slot=s))
+        before = runtime.slot_kv_tokens
+        await runtime.submit(ModelRequest(prompts[3], 8, slot=3))
+        after = runtime.slot_kv_tokens
+        resent = [await runtime.submit(ModelRequest(prompts[s], 1, slot=s)) for s in (2, 1, 0)]
+        return before, after, [r.n_cached_tokens for r in resent]
+
+    before, after, cached = run(scenario, n_slots=4, pool_tokens=2048)
+
+    assert before == (507, 507, 507, 0)
+    assert after == (0, 507, 507, 707)  # one slot deleted, and only one
+    assert cached == [499, 499, 0]
+
+
+def test_idle_slots_are_also_deleted_when_the_pool_fills_during_generation():
+    async def scenario(clock, runtime):
+        await runtime.submit(ModelRequest(tokens(1000, 10_000), 1, slot=0))
+        done = await runtime.submit(ModelRequest(tokens(1000, 20_000), 100, slot=1))
+        return done, runtime.slot_kv_tokens
+
+    done, kv = run(scenario, n_slots=2, pool_tokens=2048)
+
+    assert len(done.output_tokens) == 100
+    assert kv == (0, 1099)
+
+
+def test_overflow_with_no_idle_slot_fails_every_running_request_at_once_and_clears_its_kv():
+    # the pilot's overflow_abort probe: 4 x (400 + 400) tokens against 2048
+    async def scenario(clock, runtime):
+        running = [at(clock, 0.0, outcome(runtime, ModelRequest(tokens(400, 10_000 * (s + 1)), 400,
+                                                                slot=s)))
+                   for s in range(4)]
+        queued = at(clock, 0.2, outcome(runtime, ModelRequest(tokens(100, 90_000), 16)))
+        results = await asyncio.gather(*running, queued)
+        return results, runtime.slot_kv_tokens
+
+    (*failed, (late, late_done)), kv = run(scenario, n_slots=4, pool_tokens=2048)
+
+    assert all(isinstance(error, PoolExhausted) for error, _ in failed)
+    assert len({t for _, t in failed}) == 1  # one event
+    # each had generated about (2048 - 1600) / 4 = 112 tokens
+    assert failed[0][1] == pytest.approx(1600 * PROMPT_TOKEN_S + 113 * OUTPUT_TOKEN_S)
+    # the queued request is unaffected: it runs afterwards on a cleared pool
+    assert len(late.output_tokens) == 16
+    assert late.n_cached_tokens == 0
+    assert kv == (0, 0, 0, 100 + 15)
