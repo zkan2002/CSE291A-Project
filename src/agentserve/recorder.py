@@ -11,6 +11,7 @@ CONFIG_FILE = "config.json"
 REQUESTS_FILE = "requests.jsonl"
 TASKS_FILE = "tasks.jsonl"
 PROMPTS_FILE = "prompts.jsonl"
+UNLOADED_FILE = "unloaded.jsonl"
 SAMPLES_FILE = "samples.jsonl"
 METADATA_FILE = "metadata.json"
 SERVER_LOG_FILE = "server.log"
@@ -46,7 +47,7 @@ class Recorder:
     def __init__(self, run_dir: Path, config: dict[str, Any], *,
                  record_prompts: bool = False) -> None:
         run_dir.mkdir(parents=True, exist_ok=False)
-        self.run_dir = run_dir
+        self._run_dir = run_dir
         (run_dir / CONFIG_FILE).write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
         self._requests = _open(run_dir / REQUESTS_FILE)
         self._tasks = _open(run_dir / TASKS_FILE)
@@ -68,13 +69,20 @@ class Recorder:
     def system_sample(self, sample: dict[str, Any]) -> None:
         """One system sample (real runs only; the file is created on the first sample)."""
         if self._samples is None:
-            self._samples = _open(self.run_dir / SAMPLES_FILE)
+            self._samples = _open(self._run_dir / SAMPLES_FILE)
         _write_line(self._samples, sample)
 
     def metadata(self, metadata: dict[str, Any]) -> None:
         """Run metadata: pinned versions, hashes and launch arguments (real runs only)."""
-        (self.run_dir / METADATA_FILE).write_text(
+        (self._run_dir / METADATA_FILE).write_text(
             json.dumps(metadata, indent=2, sort_keys=True) + "\n")
+
+    def unloaded(self, records) -> None:
+        """Each agent task's unloaded completion time, task SLO and hard timeout
+        (``agentserve.unloaded.UnloadedRecord``), one line per agent task."""
+        with _open(self._run_dir / UNLOADED_FILE) as f:
+            for record in records:
+                _write_line(f, record)
 
     def close(self) -> None:
         self._requests.close()

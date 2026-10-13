@@ -108,8 +108,15 @@ def test_short_experiment_on_the_real_server_writes_a_run_directory(server_cfg, 
     assert "--kv-unified" in meta["launch_args"]
     assert (run_dir / "server.log").stat().st_size > 0
 
+    # unloaded completion times measured on the real server, each agent task alone
+    unloaded = read_jsonl(run_dir / "unloaded.jsonl")
+    assert sorted(u["task_id"] for u in unloaded) == sorted(t["task_id"] for t in tasks)
+    assert all(u["failure"] is None and u["unloaded_completion_s"] > 0.5 for u in unloaded)
+    assert (run_dir / "unloaded-server.log").stat().st_size > 0
+
     summary = summarize(run_dir)
     assert summary.agent_tasks == len(tasks) and summary.throughput_tasks_per_min > 0
+    assert summary.goodput_tasks_per_min > 0
 
     # the server was stopped after the run
     with pytest.raises(httpx.HTTPError):

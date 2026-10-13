@@ -5,6 +5,10 @@ and recorder as a simulated run on the real clock, samples the system every
 ``sample_interval_s``, and stops the server at the end. Besides the simulated
 run-directory files it writes ``samples.jsonl``, ``metadata.json`` and ``server.log``.
 The memory budget and slot count come from [server].
+
+Unloaded completion times are measured first, on a fresh server of the same config
+(log: ``unloaded-server.log``), unless cached; the experiment then gets a server of
+its own, so no retained context carries over from the measurement.
 """
 
 from __future__ import annotations
@@ -16,7 +20,9 @@ from typing import Any
 
 import httpx
 
+from agentserve import unloaded
 from agentserve.clock import RealClock
+from agentserve.experiment import _unloaded
 from agentserve.llama_runtime import LlamaServerRuntime
 from agentserve.policy import build_policy
 from agentserve.proxy import Proxy
@@ -27,7 +33,11 @@ from agentserve.server import ServerConfig, start_server, stop_server
 from agentserve.workload import AgentTaskSpec, WorkloadConfig, generate
 
 
-def run_real_experiment(config: dict[str, Any], run_dir: Path) -> None:
+UNLOADED_SERVER_LOG_FILE = "unloaded-server.log"
+
+
+def run_real_experiment(config: dict[str, Any], run_dir: Path, *,
+                        unloaded_cache_dir: Path | None = None) -> None:
     run = config["run"]
     server = ServerConfig(**config["server"])
     tasks = generate(WorkloadConfig.from_config(config["workload"]), duration_s=run["duration_s"],
@@ -35,6 +45,11 @@ def run_real_experiment(config: dict[str, Any], run_dir: Path) -> None:
     recorder = Recorder(run_dir, config, record_prompts=run.get("record_prompts", False))
     try:
         metadata = collect_run_metadata(server)
+        recorder.metadata(metadata)
+        targets = _unloaded(config, tasks, unloaded_cache_dir,
+                            measure_real=lambda: _measure_unloaded(config, server, tasks, run_dir))
+        # TODO(#6): enforce ``hard_timeout_s`` in the proxy (as for simulated runs).
+        recorder.unloaded(targets)
         launched = time.perf_counter()
         proc = start_server(server, log_path=run_dir / SERVER_LOG_FILE)
         try:
@@ -69,3 +84,30 @@ async def _run(config: dict[str, Any], server: ServerConfig, server_pid: int,
             await proxy.run(tasks)
         finally:
             await sampler.stop(sampling)
+
+
+def _measure_unloaded(config: dict[str, Any], server: ServerConfig, tasks: list[AgentTaskSpec],
+                      run_dir: Path) -> list[unloaded.UnloadedRecord]:
+    proc = start_server(server, log_path=run_dir / UNLOADED_SERVER_LOG_FILE)
+    try:
+        timeout = config["runtime"].get("request_timeout_s", 600.0)
+        return unloaded.measure(tasks, clock=RealClock(),
+                                runtime=_ClientPerRequest(server, timeout),
+                                memory_budget_tokens=server.memory_budget, n_slots=server.slots)
+    finally:
+        stop_server(proc)
+
+
+class _ClientPerRequest:
+    """The llama-server runtime with an HTTP client opened inside each submit, for
+    callers that own the event loop (``unloaded.measure``); requests there are sequential."""
+
+    def __init__(self, server: ServerConfig, timeout_s: float) -> None:
+        self._server = server
+        self._timeout = httpx.Timeout(timeout_s, connect=10.0)
+
+    async def submit(self, request):
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            runtime = LlamaServerRuntime(self._server.base_url, client=client,
+                                         cache_prompt=self._server.cache_prompt)
+            return await runtime.submit(request)

@@ -52,3 +52,17 @@ python -m uv run pytest -m real_runtime        # the same probes as assertions
 ```
 
 Findings: [`docs/pilot/pilot-findings.md`](pilot/pilot-findings.md).
+
+## Running an experiment on the real server
+
+```sh
+python -m uv run agentserve run configs/real-smoke.toml --out results/real-smoke
+python -m uv run agentserve analyze results/real-smoke
+```
+
+The run launches llama-server from the config's `[server]` table (once to measure unloaded
+completion times, then fresh for the experiment), samples VRAM, server RAM and `/slots`
+every 100 ms, and stops the server at the end. The extra files in the run directory
+(`samples.jsonl`, `metadata.json`, server logs) are described in
+[`run-directory.md`](run-directory.md). `pytest -m real_runtime` includes a smoke test
+of this command and of the adapter.
