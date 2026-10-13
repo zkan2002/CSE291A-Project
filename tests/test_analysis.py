@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agentserve.analysis import MetricWindow, summarize
+from agentserve.analysis import MetricWindow, aggregate, summarize
 from agentserve.cli import main
 
 
@@ -309,3 +309,54 @@ def test_metrics_are_broken_down_by_task_class(tmp_path):
     assert huge["queueing_mean_s"] == pytest.approx(5.0)
     assert huge["failure_rate.exceeds_context"] == pytest.approx(1 / 3)
     assert huge["fits_budget"] == 0
+
+
+def run_config(seed, concurrency=4):
+    return {"run": {"seed": seed, "duration_s": 60},
+            "workload": {"arrival_rate_per_s": 0.5, "classes": CLASSES},
+            "policy": {"name": "task_level_fifo", "concurrency": concurrency},
+            "runtime": {"kind": "simulated", "memory_budget_tokens": 1000}}
+
+
+def write_seed_run(run_dir: Path, seed: int, completed: int, concurrency=4) -> None:
+    """A 60 s run with ``completed`` agent tasks of class "small" (so that many per
+    minute), plus one failed "huge" agent task."""
+    tasks = [task(i, float(i), float(i) + 1.0, task_class="small") for i in range(completed)]
+    tasks.append(task(99, 0.0, 60.0, failure="exceeds_context", task_class="huge"))
+    write_run(run_dir, tasks, config=run_config(seed, concurrency))
+
+
+def test_runs_differing_only_in_seed_form_one_configuration_with_a_95_percent_ci(tmp_path):
+    for seed, completed in [(1, 2), (2, 4), (3, 6)]:
+        write_seed_run(tmp_path / f"n4-s{seed}", seed, completed)
+    write_seed_run(tmp_path / "n8-s1", 1, 5, concurrency=8)
+
+    configs = aggregate([summarize(d) for d in sorted(tmp_path.iterdir())])
+
+    assert [c.params["concurrency"] for c in configs] == [4, 8]
+    n4, n8 = configs
+    assert n4.seeds == [1, 2, 3]
+    throughput = n4.metrics["throughput_tasks_per_min"]
+    # 2, 4, 6 per minute: mean 4, sample sd 2, t(0.975, df=2) = 4.302653
+    assert throughput.mean == pytest.approx(4.0)
+    assert throughput.ci95 == pytest.approx(4.302653 * 2 / math.sqrt(3), rel=1e-5)
+    assert throughput.n == 3
+    # per task class, across the same seeds
+    assert n4.classes["small"]["throughput_tasks_per_min"].mean == pytest.approx(4.0)
+    assert n4.classes["huge"]["failure_rate"].mean == pytest.approx(1.0)
+    assert n4.classes["huge"]["failure_rate"].ci95 == pytest.approx(0.0)
+    # a single seed has no confidence interval
+    assert n8.metrics["throughput_tasks_per_min"].mean == pytest.approx(5.0)
+    assert math.isnan(n8.metrics["throughput_tasks_per_min"].ci95)
+
+
+def test_five_seeds_use_t_with_four_degrees_of_freedom(tmp_path):
+    for seed in range(1, 6):
+        write_seed_run(tmp_path / f"s{seed}", seed, completed=seed)
+
+    [config] = aggregate([summarize(d) for d in sorted(tmp_path.iterdir())])
+
+    throughput = config.metrics["throughput_tasks_per_min"]
+    # 1..5 per minute: mean 3, sample sd sqrt(2.5), t(0.975, df=4) = 2.776445
+    assert throughput.mean == pytest.approx(3.0)
+    assert throughput.ci95 == pytest.approx(2.776445 * math.sqrt(2.5) / math.sqrt(5), rel=1e-5)

@@ -94,6 +94,122 @@ def summarize(run_dir: Path, window: MetricWindow = MetricWindow()) -> RunAnalys
     return RunAnalysis(run_dir, config, m, classes)
 
 
+@dataclass(frozen=True)
+class Estimate:
+    """Mean across seeds with the half-width of its two-sided 95% confidence interval
+    (Student's t, ``n - 1`` degrees of freedom). ``nan`` values are left out of ``n``;
+    ``ci95`` is ``nan`` with fewer than two values."""
+
+    mean: float
+    ci95: float
+    n: int
+
+    @classmethod
+    def of(cls, values: list[float]) -> Estimate:
+        xs = [float(v) for v in values if not math.isnan(v)]
+        n = len(xs)
+        if n == 0:
+            return cls(math.nan, math.nan, 0)
+        mean = sum(xs) / n
+        if n == 1:
+            return cls(mean, math.nan, 1)
+        sd = math.sqrt(sum((x - mean) ** 2 for x in xs) / (n - 1))
+        return cls(mean, t_975(n - 1) * sd / math.sqrt(n), n)
+
+
+# t(0.975, df) for df = 1..30
+_T_975 = (12.706205, 4.302653, 3.182446, 2.776445, 2.570582, 2.446912, 2.364624, 2.306004,
+          2.262157, 2.228139, 2.200985, 2.178813, 2.160369, 2.144787, 2.131450, 2.119905,
+          2.109816, 2.100922, 2.093024, 2.085963, 2.079614, 2.073873, 2.068658, 2.063899,
+          2.059539, 2.055529, 2.051831, 2.048407, 2.045230, 2.042272)
+
+
+def t_975(df: int) -> float:
+    """The 97.5th percentile of Student's t with ``df`` degrees of freedom."""
+    if df <= len(_T_975):
+        return _T_975[df - 1]
+    z = 1.959964  # Cornish-Fisher expansion; error < 1e-5 beyond df = 30
+    return (z + (z ** 3 + z) / (4 * df) + (5 * z ** 5 + 16 * z ** 3 + 3 * z) / (96 * df ** 2)
+            + (3 * z ** 7 + 19 * z ** 5 + 17 * z ** 3 - 15 * z) / (384 * df ** 3))
+
+
+@dataclass(frozen=True)
+class Configuration:
+    """The runs whose configs are equal apart from the seed."""
+
+    config: dict
+    """The shared config, without ``run.seed``."""
+    params: dict
+    """The swept parameters, for tables and plots (see ``config_params``)."""
+    runs: list[RunAnalysis]
+    seeds: list[int]
+    metrics: dict[str, Estimate]
+    classes: dict[str, dict[str, Estimate]]
+
+
+def config_params(config: dict) -> dict:
+    """The parameters a sweep varies: admission policy, N, memory budget, arrival
+    rate and cache policy (``resident``, ``offload``, ``off``; ``None`` when the
+    config doesn't set one)."""
+    runtime, server = config.get("runtime", {}), config.get("server", {})
+    cache = server if server else runtime
+    if cache.get("cache_prompt") is False:
+        cache_policy = "off"
+    elif "cache_idle_slots" in cache:
+        cache_policy = "offload" if cache["cache_idle_slots"] else "resident"
+    else:
+        cache_policy = None
+    return {
+        "policy": config.get("policy", {}).get("name"),
+        "concurrency": config.get("policy", {}).get("concurrency"),
+        "memory_budget_tokens": runtime.get("memory_budget_tokens") or server.get("memory_budget"),
+        "arrival_rate_per_s": config.get("workload", {}).get("arrival_rate_per_s"),
+        "cache_policy": cache_policy,
+    }
+
+
+def aggregate(runs: list[RunAnalysis]) -> list[Configuration]:
+    """Group runs into configurations and estimate every metric across seeds."""
+    groups: dict[str, list[RunAnalysis]] = {}
+    for run in runs:
+        groups.setdefault(_config_key(run.config), []).append(run)
+    configs = []
+    for key, members in groups.items():
+        members.sort(key=lambda r: (_seed(r.config) is None, _seed(r.config) or 0))
+        shared = json.loads(key)
+        class_names = sorted({c for r in members for c in r.classes})
+        configs.append(Configuration(
+            config=shared, params=config_params(shared), runs=members,
+            seeds=[_seed(r.config) for r in members],
+            metrics=_estimates([r.metrics for r in members]),
+            classes={c: _estimates([r.classes[c] for r in members if c in r.classes])
+                     for c in class_names}))
+    configs.sort(key=lambda c: (_sort_key(c.params), _config_key(c.config)))
+    return configs
+
+
+def _estimates(rows: list[Metrics]) -> dict[str, Estimate]:
+    names = list(dict.fromkeys(name for row in rows for name in row))
+    # a failure cause absent from a run's line-up did not occur in it
+    return {name: Estimate.of([row.get(name, 0.0 if name.startswith("failure_rate.") else math.nan)
+                               for row in rows]) for name in names}
+
+
+def _seed(config: dict) -> int | None:
+    return config.get("run", {}).get("seed")
+
+
+def _config_key(config: dict) -> str:
+    shared = json.loads(json.dumps(config))
+    shared.get("run", {}).pop("seed", None)
+    return json.dumps(shared, sort_keys=True)
+
+
+def _sort_key(params: dict) -> tuple:
+    order = ("policy", "cache_policy", "memory_budget_tokens", "arrival_rate_per_s", "concurrency")
+    return tuple((params[k] is None, params[k] if params[k] is not None else 0) for k in order)
+
+
 def fittable_classes(config: dict) -> set[str] | None:
     """Task classes whose longest agent task fits the memory budget on its own: its
     last model request (prompt plus ``n_predict``) needs at most the whole KV pool.
