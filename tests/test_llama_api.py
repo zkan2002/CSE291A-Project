@@ -80,3 +80,28 @@ def test_other_errors_are_server_errors():
     body = {"error": {"code": 500, "message": "Compute error.", "type": "server_error"}}
     assert parse_completion(500, body).kind == "server_error"
     assert parse_completion(502, "not json").kind == "server_error"
+
+
+def _ok_body(n_output: int, truncated: bool = False) -> dict:
+    return {
+        "id_slot": 0,
+        "tokens": list(range(n_output)),
+        "tokens_predicted": n_output,
+        "tokens_evaluated": 1900,
+        "truncated": truncated,
+        "stop_type": "limit",
+        "timings": {"cache_n": 0, "prompt_ms": 100.0, "predicted_ms": 900.0},
+    }
+
+
+def test_output_cut_short_by_the_pool_is_exceeds_context():
+    # pilot: a 1900-token prompt with n_predict 300 on a 2048-token pool returned HTTP 200
+    # with only 148 output tokens and truncated: true
+    result = parse_completion(200, _ok_body(148, truncated=True), n_predict=300)
+    assert isinstance(result, RuntimeError_)
+    assert result.kind == "exceeds_context"
+    assert result.status == 200
+
+
+def test_full_length_output_is_a_completion_when_n_predict_is_checked():
+    assert isinstance(parse_completion(200, _ok_body(300), n_predict=300), Completion)

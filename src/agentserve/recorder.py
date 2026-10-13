@@ -11,6 +11,9 @@ CONFIG_FILE = "config.json"
 REQUESTS_FILE = "requests.jsonl"
 TASKS_FILE = "tasks.jsonl"
 PROMPTS_FILE = "prompts.jsonl"
+SAMPLES_FILE = "samples.jsonl"
+METADATA_FILE = "metadata.json"
+SERVER_LOG_FILE = "server.log"
 
 
 @dataclass(frozen=True)
@@ -43,10 +46,12 @@ class Recorder:
     def __init__(self, run_dir: Path, config: dict[str, Any], *,
                  record_prompts: bool = False) -> None:
         run_dir.mkdir(parents=True, exist_ok=False)
+        self.run_dir = run_dir
         (run_dir / CONFIG_FILE).write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
         self._requests = _open(run_dir / REQUESTS_FILE)
         self._tasks = _open(run_dir / TASKS_FILE)
         self._prompts = _open(run_dir / PROMPTS_FILE) if record_prompts else None
+        self._samples = None
 
     def request(self, record: RequestRecord) -> None:
         _write_line(self._requests, record)
@@ -60,11 +65,23 @@ class Recorder:
             _write_line(self._prompts, {"task_id": task_id, "step": step,
                                         "prompt_tokens": list(prompt_tokens)})
 
+    def system_sample(self, sample: dict[str, Any]) -> None:
+        """One system sample (real runs only; the file is created on the first sample)."""
+        if self._samples is None:
+            self._samples = _open(self.run_dir / SAMPLES_FILE)
+        _write_line(self._samples, sample)
+
+    def metadata(self, metadata: dict[str, Any]) -> None:
+        """Run metadata: pinned versions, hashes and launch arguments (real runs only)."""
+        (self.run_dir / METADATA_FILE).write_text(
+            json.dumps(metadata, indent=2, sort_keys=True) + "\n")
+
     def close(self) -> None:
         self._requests.close()
         self._tasks.close()
-        if self._prompts is not None:
-            self._prompts.close()
+        for f in (self._prompts, self._samples):
+            if f is not None:
+                f.close()
 
 
 def _open(path: Path):

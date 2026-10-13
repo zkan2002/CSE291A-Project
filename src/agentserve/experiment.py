@@ -21,6 +21,9 @@ def load_config(path: Path) -> dict[str, Any]:
 
 def run_experiment(config: dict[str, Any], run_dir: Path) -> None:
     run, runtime_cfg, policy_cfg = config["run"], config["runtime"], config["policy"]
+    if runtime_cfg["kind"] == "llama_server":
+        from agentserve.real_experiment import run_real_experiment
+        return run_real_experiment(config, run_dir)
     if runtime_cfg["kind"] != "simulated":
         raise ValueError(f"unsupported runtime kind: {runtime_cfg['kind']!r}")
     clock: Clock = VirtualClock()
