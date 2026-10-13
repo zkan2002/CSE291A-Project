@@ -7,6 +7,7 @@
 | `config.json` | The full resolved config the run used (keys sorted). |
 | `requests.jsonl` | One line per model request, written when it completes or fails. |
 | `tasks.jsonl` | One line per agent task, written when it completes or fails. |
+| `prompts.jsonl` | Only with `record_prompts = true` under `[run]`: one line per model request, written when it is issued. |
 
 All times are seconds since the experiment started, on the run's clock (virtual for the simulated runtime). Lines are JSON objects with sorted keys, so the same config and seed give byte-identical files on the virtual clock. Nothing is dropped: a failed model request or failed task still gets its line.
 
@@ -21,6 +22,7 @@ All times are seconds since the experiment started, on the run's clock (virtual 
 | `completed_s` | When the runtime returned a completion or an error. |
 | `n_prompt_tokens` | Prompt length in tokens. |
 | `n_cached_tokens` | Prompt tokens served from retained context; `null` on error. |
+| `n_predict` | Output tokens requested (EOS ignored, so a completion has exactly this many). |
 | `n_output_tokens` | Generated tokens (0 on error). |
 | `slot` | Slot the runtime used (or the pinned slot, on error). |
 | `error` | `null`, or the typed error: `pool_exhausted`, `exceeds_context`, `server_error`, `timeout`. |
@@ -36,3 +38,10 @@ All times are seconds since the experiment started, on the run's clock (virtual 
 | `failure` | `null`, or the cause of the failed task (the error of its failing model request). |
 
 An agent task is *active* from `step_admitted_s[0]` to `completed_s`.
+
+## `prompts.jsonl`
+
+| Field | Meaning |
+| --- | --- |
+| `task_id`, `step` | The agent task and the index of its agent step. |
+| `prompt_tokens` | The exact token-ID array sent as the model request's prompt. |

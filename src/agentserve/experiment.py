@@ -11,7 +11,7 @@ from agentserve.policy import build_policy
 from agentserve.proxy import Proxy
 from agentserve.recorder import Recorder
 from agentserve.simulated import SimulatedRuntime
-from agentserve.workload import TaskClass, WorkloadConfig, generate
+from agentserve.workload import WorkloadConfig, generate
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -25,15 +25,13 @@ def run_experiment(config: dict[str, Any], run_dir: Path) -> None:
         raise ValueError(f"unsupported runtime kind: {runtime_cfg['kind']!r}")
     clock: Clock = VirtualClock()
 
-    workload = WorkloadConfig(
-        arrival_rate_per_s=config["workload"]["arrival_rate_per_s"],
-        classes=tuple(TaskClass(**c) for c in config["workload"]["classes"]),
-    )
-    tasks = generate(workload, duration_s=run["duration_s"], seed=run["seed"])
+    workload = WorkloadConfig.from_config(config["workload"])
+    tasks = generate(workload, duration_s=run["duration_s"], seed=run["seed"],
+                     split=run.get("split", "dev"))
     runtime = SimulatedRuntime(clock, n_slots=runtime_cfg["n_slots"],
                                prompt_token_s=runtime_cfg["prompt_token_s"],
                                output_token_s=runtime_cfg["output_token_s"])
-    recorder = Recorder(run_dir, config)
+    recorder = Recorder(run_dir, config, record_prompts=run.get("record_prompts", False))
     try:
         proxy = Proxy(policy=build_policy(policy_cfg["name"], concurrency=policy_cfg["concurrency"]),
                       runtime=runtime, clock=clock, recorder=recorder,

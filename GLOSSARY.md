@@ -18,6 +18,14 @@ _Avoid_: Turn, round, iteration
 A single call to the inference runtime, issued on behalf of one agent step.
 _Avoid_: Query, inference call, request (unqualified)
 
+**Task class**:
+A kind of agent task in a workload mix, fixed by its starting context length, output length per agent step and range of agent steps.
+_Avoid_: Task type, category
+
+**Development workload / evaluation workload**:
+Workloads for tuning and for reporting. They come from separate seed streams (the run's `split`), and evaluation can use a held-out mix weighting, so tuning never sees evaluation data.
+_Avoid_: Train/test workload
+
 **Tool delay**:
 The idle interval between two agent steps of the same agent task while it waits on a simulated tool.
 _Avoid_: Think time, gap, pause

@@ -52,6 +52,7 @@ class Proxy:
         failure = None
         for k, step in enumerate(spec.steps):
             request = ModelRequest(tuple(prompt), step.n_predict)
+            self._recorder.prompt(spec.task_id, k, request.prompt_tokens)
             try:
                 output = await self._model_request(spec.task_id, k, request, step_admitted)
             except RuntimeFailure as e:
@@ -121,4 +122,5 @@ class Proxy:
             task_id=ref.task_id, step=ref.step, arrived_s=arrived, admitted_s=admitted,
             first_token_s=first_token_s, completed_s=self._clock.now(),
             n_prompt_tokens=len(request.prompt_tokens), n_cached_tokens=n_cached,
+            n_predict=request.n_predict,
             n_output_tokens=n_output, slot=slot, error=error))

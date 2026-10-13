@@ -1,0 +1,31 @@
+# The default 8-class workload mix (docs/workload.md), task-level admission FIFO,
+# simulated runtime.
+#   python -m uv run agentserve run configs/default-mix.toml --out results/default-mix
+#   python -m uv run agentserve analyze results/default-mix
+
+[run]
+seed = 1
+split = "dev"             # "dev" for tuning, "eval" for evaluation: the two never share a seed
+duration_s = 600          # arrivals are released over [0, duration_s); the run then drains
+record_prompts = false    # true also writes prompts.jsonl (every prompt's token array; large)
+
+[workload]
+mix = "default"           # 8 classes; or list [[workload.classes]] instead
+arrival_rate_per_s = 0.2  # mean rate, in either arrival mode
+arrival_mode = "poisson"  # or "on_off" (bursty)
+burst_on_s = 10.0         # on_off only: mean on-period length
+burst_off_s = 30.0        # on_off only: mean off-period length
+tool_result_tokens = 200  # appended to the context after every agent step but the last
+tool_delay_median_s = 1.0 # log-normal tool delay
+tool_delay_sigma = 0.5
+
+[policy]
+name = "task_level_fifo"
+concurrency = 4
+
+[runtime]
+kind = "simulated"
+n_slots = 4
+memory_budget_tokens = 32768  # KV-pool token capacity (ADR-0001)
+prompt_token_s = 0.0002       # simulated prompt processing time per uncached token
+output_token_s = 0.01         # simulated decode time per output token
