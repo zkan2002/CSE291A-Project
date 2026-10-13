@@ -11,6 +11,7 @@ CONFIG_FILE = "config.json"
 REQUESTS_FILE = "requests.jsonl"
 TASKS_FILE = "tasks.jsonl"
 PROMPTS_FILE = "prompts.jsonl"
+UNLOADED_FILE = "unloaded.jsonl"
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,7 @@ class Recorder:
     def __init__(self, run_dir: Path, config: dict[str, Any], *,
                  record_prompts: bool = False) -> None:
         run_dir.mkdir(parents=True, exist_ok=False)
+        self._run_dir = run_dir
         (run_dir / CONFIG_FILE).write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
         self._requests = _open(run_dir / REQUESTS_FILE)
         self._tasks = _open(run_dir / TASKS_FILE)
@@ -59,6 +61,13 @@ class Recorder:
         if self._prompts is not None:
             _write_line(self._prompts, {"task_id": task_id, "step": step,
                                         "prompt_tokens": list(prompt_tokens)})
+
+    def unloaded(self, records) -> None:
+        """Each agent task's unloaded completion time, task SLO and hard timeout
+        (``agentserve.unloaded.UnloadedRecord``), one line per agent task."""
+        with _open(self._run_dir / UNLOADED_FILE) as f:
+            for record in records:
+                _write_line(f, record)
 
     def close(self) -> None:
         self._requests.close()
