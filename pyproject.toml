@@ -5,6 +5,9 @@ description = "Memory-aware agent serving experiments (CSE 291A Option 1)"
 requires-python = ">=3.11,<3.12"
 dependencies = []
 
+[project.scripts]
+agentserve = "agentserve.cli:main"
+
 [dependency-groups]
 dev = ["pytest>=8"]
 
