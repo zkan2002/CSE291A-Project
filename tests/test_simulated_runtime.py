@@ -244,3 +244,133 @@ def test_overflow_with_no_idle_slot_fails_every_running_request_at_once_and_clea
     assert len(late.output_tokens) == 16
     assert late.n_cached_tokens == 0
     assert kv == (0, 0, 0, 100 + 15)
+
+
+# --- cache policies -------------------------------------------------------------
+# resident: --no-cache-idle-slots, agent steps pinned with id_slot
+# offload:  --cache-idle-slots (the b11606 default), agent steps not pinned
+
+RAM = 100_000  # host-RAM prompt cache capacity, in tokens
+
+
+async def agent_pattern(clock, runtime, *, pin: bool):
+    """The pilot's cache_idle_slots probe: A, then an unrelated X, then B extending A."""
+    a_prompt = tokens(600, 10_000)
+    a = await runtime.submit(ModelRequest(a_prompt, 32, slot=0 if pin else None))
+    await runtime.submit(ModelRequest(tokens(300, 70_000), 32, slot=1 if pin else None))
+    in_pool, in_ram = runtime.slot_kv_tokens, runtime.ram_cache_tokens
+    b = await runtime.submit(ModelRequest(a_prompt + a.output_tokens + tokens(200, 50_000), 32,
+                                          slot=0 if pin else None))
+    return a, b, in_pool, in_ram
+
+
+def test_resident_policy_keeps_idle_context_in_the_pool_for_the_pinned_next_step():
+    a, b, in_pool, in_ram = run(lambda c, r: agent_pattern(c, r, pin=True),
+                                cache_ram_tokens=RAM, cache_idle_slots=False)
+
+    assert in_pool == (631, 331, 0, 0)
+    assert in_ram == 0
+    assert (b.slot, b.n_cached_tokens) == (0, 631)
+
+
+def test_offload_policy_moves_idle_slots_to_host_ram_whenever_a_request_starts():
+    a, b, in_pool, in_ram = run(lambda c, r: agent_pattern(c, r, pin=True),
+                                cache_ram_tokens=RAM, cache_idle_slots=True)
+
+    assert in_pool == (0, 331, 0, 0)
+    assert in_ram == 631
+    # a pinned step lands on its emptied slot and never consults host RAM
+    assert (b.slot, b.n_cached_tokens) == (0, 0)
+
+
+def test_offload_policy_restores_an_unpinned_step_from_host_ram_onto_another_slot():
+    a, b, in_pool, in_ram = run(lambda c, r: agent_pattern(c, r, pin=False),
+                                cache_ram_tokens=RAM, cache_idle_slots=True)
+
+    assert (a.slot, b.slot) == (3, 1)
+    assert in_ram == 631
+    assert b.n_cached_tokens == 631
+
+
+def test_offload_needs_the_host_ram_cache():
+    # --cache-idle-slots is silently disabled with --cache-ram 0
+    a, b, in_pool, in_ram = run(lambda c, r: agent_pattern(c, r, pin=True),
+                                cache_ram_tokens=0, cache_idle_slots=True)
+
+    assert in_pool == (631, 331, 0, 0)
+    assert b.n_cached_tokens == 631
+
+
+def test_reusing_a_slot_by_least_recently_used_saves_its_old_prompt_to_host_ram():
+    async def scenario(clock, runtime):
+        return await agent_pattern(clock, runtime, pin=False)
+
+    with_ram = run(scenario, n_slots=1, cache_ram_tokens=RAM)
+    without_ram = run(scenario, n_slots=1, cache_ram_tokens=0)
+
+    assert with_ram[1].n_cached_tokens == 631
+    assert without_ram[1].n_cached_tokens == 0
+
+
+def test_the_host_ram_cache_evicts_its_oldest_prompts_beyond_its_capacity():
+    async def scenario(clock, runtime):
+        a, b, _, _ = await agent_pattern(clock, runtime, pin=False)
+        return b, runtime.ram_cache_tokens
+
+    b, in_ram = run(scenario, n_slots=1, cache_ram_tokens=700)
+
+    # A (631) was saved, then X's 331 pushed it out
+    assert b.n_cached_tokens == 0
+    assert in_ram == 331
+
+
+def test_deleting_an_idle_slot_to_make_room_discards_its_kv_rather_than_saving_it():
+    async def scenario(clock, runtime):
+        await runtime.submit(ModelRequest(tokens(1000, 10_000), 1, slot=0))
+        await runtime.submit(ModelRequest(tokens(1500, 20_000), 1, slot=1))
+        return runtime.slot_kv_tokens, runtime.ram_cache_tokens
+
+    kv, in_ram = run(scenario, n_slots=2, pool_tokens=2048, cache_ram_tokens=RAM)
+
+    assert kv == (0, 1500)
+    assert in_ram == 0
+
+
+# --- time and occupancy -----------------------------------------------------------
+
+
+def test_cached_prompt_tokens_are_not_processed_again():
+    a = tokens(1000, 10_000)
+
+    async def scenario(clock, runtime):
+        first = await runtime.submit(ModelRequest(a, 10, slot=0))
+        started = clock.now()
+        second = await runtime.submit(ModelRequest(a + first.output_tokens + tokens(100, 50_000),
+                                                   10, slot=0))
+        return second, clock.now() - started
+
+    second, elapsed = run(scenario)
+
+    assert second.n_cached_tokens == 1009
+    assert second.prompt_s == pytest.approx(101 * PROMPT_TOKEN_S)
+    assert elapsed == pytest.approx(101 * PROMPT_TOKEN_S + 10 * OUTPUT_TOKEN_S)
+
+
+def test_kv_occupancy_grows_with_the_prompt_and_then_one_token_per_generated_output():
+    async def scenario(clock, runtime):
+        seen = []
+
+        async def watch():
+            for t in (0.05, 0.5 + 0.005, 0.5 + 0.505):
+                await clock.sleep(t - clock.now())
+                seen.append(runtime.kv_tokens)
+
+        await asyncio.gather(runtime.submit(ModelRequest(tokens(500, 10_000), 100, slot=0)),
+                             watch())
+        return seen, runtime.kv_tokens
+
+    seen, final = run(scenario)
+
+    # mid-prompt the batch is already allocated; then 50 outputs in, 49 are in KV
+    assert seen == [500, 500, 550]
+    assert final == 599

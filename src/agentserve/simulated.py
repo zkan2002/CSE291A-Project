@@ -63,13 +63,17 @@ class _Job:
 class SimulatedRuntime:
     def __init__(self, clock: Clock, *, n_slots: int, pool_tokens: int,
                  prompt_token_s: float, output_token_s: float,
-                 n_batch: int = 2048, similarity: float = 0.10) -> None:
+                 n_batch: int = 2048, similarity: float = 0.10,
+                 cache_ram_tokens: int = 0, cache_idle_slots: bool = False) -> None:
         self._clock = clock
         self._pool_tokens = pool_tokens
         self._prompt_token_s = prompt_token_s
         self._output_token_s = output_token_s
         self._n_batch = n_batch
         self._similarity = similarity
+        self._cache_ram_tokens = cache_ram_tokens
+        self._cache_idle_slots = cache_idle_slots and cache_ram_tokens > 0
+        self._ram: deque[tuple[int, ...]] = deque()
         self._slots = [_Slot(i) for i in range(n_slots)]
         self._queue: deque[_Job] = deque()
         self._engine: asyncio.Task[None] | None = None
@@ -85,6 +89,11 @@ class SimulatedRuntime:
     def slot_kv_tokens(self) -> tuple[int, ...]:
         """Tokens each slot currently holds in the KV pool, by slot index."""
         return tuple(len(s.kv) for s in self._slots)
+
+    @property
+    def ram_cache_tokens(self) -> int:
+        """Tokens of saved prompts held in the host-RAM prompt cache (outside the pool)."""
+        return sum(len(p) for p in self._ram)
 
     # --- runtime interface --------------------------------------------------
 
@@ -107,7 +116,7 @@ class SimulatedRuntime:
 
     def _start_queued(self) -> None:
         for job in list(self._queue):
-            slot = self._pick_slot(job.request)
+            slot, by_id = self._pick_slot(job.request)
             if slot is None:
                 continue
             self._queue.remove(job)
@@ -116,15 +125,22 @@ class SimulatedRuntime:
                     f"request ({len(job.prompt)} tokens) exceeds the available context size "
                     f"({self._pool_tokens} tokens)"))
                 continue
+            if self._cache_ram_tokens and not by_id:
+                self._swap_with_ram(slot, job.prompt)
+            if self._cache_idle_slots:
+                for other in self._slots:
+                    if other is not slot and other.job is None and other.kv:
+                        self._save(other)
             self._start(job, slot)
 
-    def _pick_slot(self, request: ModelRequest) -> _Slot | None:
+    def _pick_slot(self, request: ModelRequest) -> tuple[_Slot | None, bool]:
+        """The slot for ``request`` (None if it must wait), and whether it was picked by id."""
         if request.slot is not None:
             slot = self._slots[request.slot]
-            return slot if slot.job is None else None
+            return (slot if slot.job is None else None), True
         idle = [s for s in self._slots if s.job is None]
         if not idle:
-            return None
+            return None, False
         best, best_sim = None, self._similarity
         for slot in idle:
             if slot.kv:
@@ -132,12 +148,43 @@ class SimulatedRuntime:
                 if sim > best_sim:
                     best, best_sim = slot, sim
         if best is not None:
-            return best
+            return best, False
         lru = idle[0]
         for slot in idle[1:]:
             if slot.t_last_used <= lru.t_last_used:  # ties go to the highest index
                 lru = slot
-        return lru
+        return lru, False
+
+    # --- host-RAM prompt cache ------------------------------------------------
+
+    def _swap_with_ram(self, slot: _Slot, prompt: tuple[int, ...]) -> None:
+        """An unpinned request reusing a slot by LRU, or by a prefix that keeps less
+        than half the slot's tokens, saves the slot's prompt to host RAM and loads
+        the best-matching saved prompt instead (never on the id_slot path)."""
+        lcp = _common_prefix(slot.kv, prompt)
+        if slot.kv and lcp >= 0.5 * len(slot.kv):
+            return
+        if slot.kv:
+            self._save(slot)
+        best, best_keep, best_sim = None, 0.0, 0.0
+        for saved in self._ram:
+            n = _common_prefix(saved, prompt)
+            keep, sim = n / len(saved), n / len(prompt)
+            if keep > best_keep and sim > best_sim:
+                best, best_keep, best_sim = saved, keep, sim
+        if best is not None and len(best) <= self._pool_tokens - self.kv_tokens:
+            self._ram.remove(best)
+            slot.kv = list(best)
+
+    def _save(self, slot: _Slot) -> None:
+        """Move a slot's KV out of the pool into the host-RAM cache, oldest evicted first."""
+        saved = tuple(slot.kv)
+        slot.kv.clear()
+        if len(saved) > self._cache_ram_tokens:
+            return
+        self._ram.append(saved)
+        while self.ram_cache_tokens > self._cache_ram_tokens:
+            self._ram.popleft()
 
     def _start(self, job: _Job, slot: _Slot) -> None:
         n_cached = min(_common_prefix(slot.kv, job.prompt), len(job.prompt) - 1)
