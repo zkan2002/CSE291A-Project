@@ -29,6 +29,7 @@ def run_experiment(config: dict[str, Any], run_dir: Path) -> None:
     tasks = generate(workload, duration_s=run["duration_s"], seed=run["seed"],
                      split=run.get("split", "dev"))
     runtime = SimulatedRuntime(clock, n_slots=runtime_cfg["n_slots"],
+                               pool_tokens=runtime_cfg["memory_budget_tokens"],
                                prompt_token_s=runtime_cfg["prompt_token_s"],
                                output_token_s=runtime_cfg["output_token_s"])
     recorder = Recorder(run_dir, config, record_prompts=run.get("record_prompts", False))
