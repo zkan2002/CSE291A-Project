@@ -200,3 +200,42 @@ def test_evaluation_workloads_use_the_held_out_mix_weighting(tmp_path):
     assert {t["task_class"] for t in read_jsonl(ev / "tasks.jsonl")} == {"eval_only"}
 
 
+def test_the_default_mix_covers_all_eight_corners_of_context_output_and_step_count(tmp_path):
+    config = write_config(tmp_path, classes="", workload='mix = "default"\n', duration_s=600)
+
+    run_dir = run(tmp_path, config)
+
+    requests = by_task(read_jsonl(run_dir / "requests.jsonl"))
+    corners = {}
+    for t in read_jsonl(run_dir / "tasks.jsonl"):
+        steps = requests[t["task_id"]]
+        assert t["failure"] is None
+        n_steps = len(steps)
+        corner = (steps[0]["n_prompt_tokens"], steps[0]["n_predict"],
+                  "few" if 2 <= n_steps <= 3 else "many" if 8 <= n_steps <= 12 else n_steps)
+        corners.setdefault(t["task_class"], set()).add(corner)
+    assert len(corners) == 8
+    assert all(len(c) == 1 for c in corners.values())  # a class is one corner
+    assert {next(iter(c)) for c in corners.values()} == {
+        (ctx, out, steps) for ctx in (500, 4000) for out in (50, 400) for steps in ("few", "many")}
+
+
+def test_tool_delays_are_log_normal_around_the_configured_median(tmp_path):
+    config = write_config(tmp_path, classes=SHORT_ONLY, duration_s=1000, workload=(
+        "tool_delay_median_s = 5.0\ntool_delay_sigma = 0.5\n"))
+
+    run_dir = run(tmp_path, config)
+
+    # The tool delay is the gap between one agent step's completion and the
+    # next agent step's model request reaching the proxy.
+    delays = sorted(cur["arrived_s"] - prev["completed_s"]
+                    for steps in by_task(read_jsonl(run_dir / "requests.jsonl")).values()
+                    for prev, cur in zip(steps, steps[1:]))
+    assert len(delays) > 300
+    median = delays[len(delays) // 2]
+    assert 4.5 < median < 5.5
+    # log-normal with sigma 0.5: ~16% of delays fall above median * e^0.5
+    above = sum(d > 5.0 * 1.6487 for d in delays) / len(delays)
+    assert 0.11 < above < 0.21
+
+

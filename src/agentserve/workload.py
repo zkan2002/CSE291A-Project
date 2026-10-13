@@ -66,9 +66,53 @@ class WorkloadConfig:
 
     @classmethod
     def from_config(cls, c: dict) -> WorkloadConfig:
+        """Build from the ``[workload]`` table of an experiment config.
+
+        The task classes are either ``[[workload.classes]]`` or ``mix =
+        "default"`` (the 8-class ``DEFAULT_MIX``). ``tool_result_tokens``,
+        ``tool_delay_median_s`` and ``tool_delay_sigma`` set at workload level
+        apply to every class that does not set its own.
+        """
         c = dict(c)
-        c["classes"] = tuple(TaskClass.from_config(k) for k in c["classes"])
+        mix = c.pop("mix", None)
+        shared = {k: c.pop(k) for k in _CLASS_DEFAULT_KEYS if k in c}
+        if mix is not None:
+            if "classes" in c:
+                raise ValueError("give either a mix or [[workload.classes]], not both")
+            if mix not in MIXES:
+                raise ValueError(f"unknown mix: {mix!r} (expected one of {sorted(MIXES)})")
+            raw_classes = MIXES[mix]
+        else:
+            raw_classes = c["classes"]
+        c["classes"] = tuple(TaskClass.from_config({**shared, **k}) for k in raw_classes)
         return cls(**c)
+
+
+_CLASS_DEFAULT_KEYS = ("tool_result_tokens", "tool_delay_median_s", "tool_delay_sigma")
+
+
+def _default_mix() -> tuple[dict, ...]:
+    """Short/long starting context x short/long output per agent step x
+    few/many agent steps. Development weights are uniform; the held-out
+    evaluation weighting doubles the many-step classes. The values are
+    justified in docs/workload.md."""
+    classes = []
+    for ctx_name, ctx in (("short_ctx", 500), ("long_ctx", 4000)):
+        for out_name, out in (("short_out", 50), ("long_out", 400)):
+            for steps_name, steps in (("few_steps", [2, 3]), ("many_steps", [8, 12])):
+                classes.append({
+                    "name": f"{ctx_name}-{out_name}-{steps_name}",
+                    "weight": 1.0,
+                    "eval_weight": 2.0 if steps_name == "many_steps" else 1.0,
+                    "initial_context_tokens": ctx,
+                    "output_tokens": out,
+                    "steps": steps,
+                })
+    return tuple(classes)
+
+
+DEFAULT_MIX = _default_mix()
+MIXES = {"default": DEFAULT_MIX}
 
 
 @dataclass(frozen=True)
