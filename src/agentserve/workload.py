@@ -1,4 +1,4 @@
-"""Workload generator: a pure function of (workload config, duration, seed).
+"""Workload generator: a pure function of (workload config, duration, seed, split).
 
 It returns agent-task specs. Prompts are token-ID arrays; the prompt of agent
 step k+1 is built by the proxy as prompt_k + output_k + tool_result_k, so each
@@ -28,6 +28,13 @@ class TaskClass:
     tool_delay_median_s: float = 1.0
     tool_delay_sigma: float = 0.5
     """Log-normal shape: the tool delay is ``median * exp(sigma * Z)``."""
+    eval_weight: float | None = None
+    """Held-out mix weight used for evaluation workloads; ``None`` means ``weight``."""
+
+    def weight_for(self, split: str) -> float:
+        if split == "eval" and self.eval_weight is not None:
+            return self.eval_weight
+        return self.weight
 
     @classmethod
     def from_config(cls, c: dict) -> TaskClass:
@@ -82,15 +89,25 @@ class AgentTaskSpec:
     steps: tuple[AgentStepSpec, ...]
 
 
-def generate(config: WorkloadConfig, *, duration_s: float, seed: int) -> list[AgentTaskSpec]:
+SPLITS = ("dev", "eval")
+
+
+def generate(config: WorkloadConfig, *, duration_s: float, seed: int,
+             split: str = "dev") -> list[AgentTaskSpec]:
     """Open-loop agent-task arrivals over ``[0, duration_s)``.
 
-    Arrival times and task contents come from separate random streams, so the
-    arrival process does not shift when the task mix changes.
+    ``split`` is ``dev`` (development: tuning) or ``eval`` (evaluation). The
+    random streams are keyed by split as well as seed, so a development
+    workload and an evaluation workload never share a seed, whatever seed
+    numbers they are given; evaluation workloads also use each class's held-out
+    ``eval_weight``. Arrival times and task contents come from separate
+    streams, so the arrival process does not shift when the task mix changes.
     """
-    arrivals = random.Random(f"agentserve/{seed}/arrivals")
-    rng = random.Random(f"agentserve/{seed}/tasks")
-    weights = [c.weight for c in config.classes]
+    if split not in SPLITS:
+        raise ValueError(f"unknown split: {split!r} (expected one of {SPLITS})")
+    arrivals = random.Random(f"agentserve/{split}/{seed}/arrivals")
+    rng = random.Random(f"agentserve/{split}/{seed}/tasks")
+    weights = [c.weight_for(split) for c in config.classes]
     tasks: list[AgentTaskSpec] = []
     for t in _arrival_times(config, arrivals, duration_s):
         cls = rng.choices(config.classes, weights=weights)[0]

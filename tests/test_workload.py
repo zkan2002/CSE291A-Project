@@ -141,3 +141,62 @@ def test_bursty_arrivals_cluster_far_more_than_poisson_at_the_same_mean_rate(tmp
     assert b.count(0) > 100 > 10 > p.count(0)
 
 
+def workload_fingerprint(run_dir: Path) -> list[tuple]:
+    """What the workload put into a run: arrivals, classes and step counts."""
+    steps = by_task(read_jsonl(run_dir / "requests.jsonl"))
+    return [(t["arrived_s"], t["task_class"], len(steps[t["task_id"]]))
+            for t in sorted(read_jsonl(run_dir / "tasks.jsonl"), key=lambda t: t["task_id"])]
+
+
+def test_development_and_evaluation_workloads_never_share_a_seed(tmp_path):
+    fingerprints = {}
+    for split in ("dev", "eval"):
+        for seed in range(5):
+            config = write_config(tmp_path, name=f"{split}{seed}", seed=seed,
+                                  run=f'split = "{split}"\n')
+            fingerprints[(split, seed)] = workload_fingerprint(run(tmp_path, config, f"{split}{seed}"))
+
+    for (split, seed), fp in fingerprints.items():
+        assert fp
+        for other_split in ("dev", "eval"):
+            if other_split != split:
+                assert all(fp != other for (s, _), other in fingerprints.items() if s == other_split)
+
+
+def test_same_split_and_seed_reproduce_the_same_workload(tmp_path):
+    config = write_config(tmp_path, seed=4, run='split = "eval"\nrecord_prompts = true\n')
+
+    first, second = run(tmp_path, config, "first"), run(tmp_path, config, "second")
+
+    for name in ("prompts.jsonl", "requests.jsonl", "tasks.jsonl"):
+        assert (first / name).read_bytes() == (second / name).read_bytes(), name
+
+
+HELD_OUT_WEIGHTING = """\
+[[workload.classes]]
+name = "dev_only"
+weight = 1.0
+eval_weight = 0.0
+initial_context_tokens = 100
+output_tokens = 10
+steps = 2
+
+[[workload.classes]]
+name = "eval_only"
+weight = 0.0
+eval_weight = 1.0
+initial_context_tokens = 100
+output_tokens = 10
+steps = 2
+"""
+
+
+def test_evaluation_workloads_use_the_held_out_mix_weighting(tmp_path):
+    dev = run(tmp_path, write_config(tmp_path, name="dev", classes=HELD_OUT_WEIGHTING), "dev")
+    ev = run(tmp_path, write_config(tmp_path, name="eval", classes=HELD_OUT_WEIGHTING,
+                                    run='split = "eval"\n'), "eval")
+
+    assert {t["task_class"] for t in read_jsonl(dev / "tasks.jsonl")} == {"dev_only"}
+    assert {t["task_class"] for t in read_jsonl(ev / "tasks.jsonl")} == {"eval_only"}
+
+

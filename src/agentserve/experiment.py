@@ -26,7 +26,8 @@ def run_experiment(config: dict[str, Any], run_dir: Path) -> None:
     clock: Clock = VirtualClock()
 
     workload = WorkloadConfig.from_config(config["workload"])
-    tasks = generate(workload, duration_s=run["duration_s"], seed=run["seed"])
+    tasks = generate(workload, duration_s=run["duration_s"], seed=run["seed"],
+                     split=run.get("split", "dev"))
     runtime = SimulatedRuntime(clock, n_slots=runtime_cfg["n_slots"],
                                prompt_token_s=runtime_cfg["prompt_token_s"],
                                output_token_s=runtime_cfg["output_token_s"])
