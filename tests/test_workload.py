@@ -43,10 +43,11 @@ output_token_s = 0.01
 
 
 def write_config(tmp_path: Path, *, run: str = "", workload: str = "",
-                 classes: str = TWO_CLASSES, name: str = "config") -> Path:
+                 classes: str = TWO_CLASSES, name: str = "config",
+                 seed: int = 1, duration_s: float = 60) -> Path:
     path = tmp_path / f"{name}.toml"
     path.write_text(
-        "[run]\nseed = 1\nduration_s = 60\n" + run
+        f"[run]\nseed = {seed}\nduration_s = {duration_s}\n" + run
         + "\n[workload]\narrival_rate_per_s = 0.5\n" + workload
         + "\n" + classes + "\n" + POLICY_AND_RUNTIME)
     return path
@@ -95,3 +96,48 @@ def test_every_recorded_output_length_equals_its_n_predict(tmp_path):
     for r in requests:
         assert r["n_output_tokens"] == r["n_predict"]
         assert r["n_predict"] == {"short": 50, "long": 400}[tasks[r["task_id"]]["task_class"]]
+
+
+SHORT_ONLY = """\
+[[workload.classes]]
+name = "short"
+weight = 1.0
+initial_context_tokens = 100
+output_tokens = 10
+steps = 2
+"""
+
+
+def arrival_counts(run_dir: Path, *, window_s: float, duration_s: float) -> list[int]:
+    counts = [0] * int(duration_s / window_s)
+    for t in read_jsonl(run_dir / "tasks.jsonl"):
+        counts[int(t["arrived_s"] / window_s)] += 1
+    return counts
+
+
+def dispersion(counts: list[int]) -> float:
+    """Variance-to-mean ratio of per-window arrival counts: about 1 for Poisson."""
+    mean = sum(counts) / len(counts)
+    return sum((c - mean) ** 2 for c in counts) / (len(counts) - 1) / mean
+
+
+def test_bursty_arrivals_cluster_far_more_than_poisson_at_the_same_mean_rate(tmp_path):
+    common = dict(classes=SHORT_ONLY, seed=3, duration_s=3000)
+    poisson = write_config(tmp_path, name="poisson", **common)
+    bursty = write_config(tmp_path, name="bursty", **common, workload=(
+        'arrival_mode = "on_off"\nburst_on_s = 10.0\nburst_off_s = 30.0\n'))
+
+    p = arrival_counts(run(tmp_path, poisson, "p"), window_s=10, duration_s=3000)
+    b = arrival_counts(run(tmp_path, bursty, "b"), window_s=10, duration_s=3000)
+
+    # Both average 0.5 agent tasks/s (~1500 arrivals); bursty totals vary more
+    # from seed to seed because 3000 s holds only ~75 on/off cycles.
+    assert 1350 < sum(p) < 1650
+    assert 1125 < sum(b) < 1875
+    # Poisson counts per 10 s window have variance ~= mean; bursty ones bunch
+    # into on periods separated by silent off periods.
+    assert dispersion(p) < 1.5
+    assert dispersion(b) > 5.0
+    assert b.count(0) > 100 > 10 > p.count(0)
+
+

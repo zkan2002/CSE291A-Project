@@ -11,7 +11,7 @@ from agentserve.policy import build_policy
 from agentserve.proxy import Proxy
 from agentserve.recorder import Recorder
 from agentserve.simulated import SimulatedRuntime
-from agentserve.workload import TaskClass, WorkloadConfig, generate
+from agentserve.workload import WorkloadConfig, generate
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -25,10 +25,7 @@ def run_experiment(config: dict[str, Any], run_dir: Path) -> None:
         raise ValueError(f"unsupported runtime kind: {runtime_cfg['kind']!r}")
     clock: Clock = VirtualClock()
 
-    workload = WorkloadConfig(
-        arrival_rate_per_s=config["workload"]["arrival_rate_per_s"],
-        classes=tuple(TaskClass.from_config(c) for c in config["workload"]["classes"]),
-    )
+    workload = WorkloadConfig.from_config(config["workload"])
     tasks = generate(workload, duration_s=run["duration_s"], seed=run["seed"])
     runtime = SimulatedRuntime(clock, n_slots=runtime_cfg["n_slots"],
                                prompt_token_s=runtime_cfg["prompt_token_s"],

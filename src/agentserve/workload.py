@@ -37,10 +37,31 @@ class TaskClass:
         return cls(**c)
 
 
+ARRIVAL_MODES = ("poisson", "on_off")
+
+
 @dataclass(frozen=True)
 class WorkloadConfig:
     arrival_rate_per_s: float
+    """Mean agent-task arrival rate, in every arrival mode."""
     classes: tuple[TaskClass, ...]
+    arrival_mode: str = "poisson"
+    """``poisson``: open-loop Poisson arrivals. ``on_off``: bursty arrivals that
+    alternate between on periods (Poisson at ``rate * (on + off) / on``) and
+    silent off periods, with exponentially distributed period lengths of mean
+    ``burst_on_s`` and ``burst_off_s``; the mean rate is unchanged."""
+    burst_on_s: float = 10.0
+    burst_off_s: float = 30.0
+
+    def __post_init__(self) -> None:
+        if self.arrival_mode not in ARRIVAL_MODES:
+            raise ValueError(f"unknown arrival mode: {self.arrival_mode!r}")
+
+    @classmethod
+    def from_config(cls, c: dict) -> WorkloadConfig:
+        c = dict(c)
+        c["classes"] = tuple(TaskClass.from_config(k) for k in c["classes"])
+        return cls(**c)
 
 
 @dataclass(frozen=True)
@@ -62,12 +83,16 @@ class AgentTaskSpec:
 
 
 def generate(config: WorkloadConfig, *, duration_s: float, seed: int) -> list[AgentTaskSpec]:
-    """Open-loop Poisson arrivals over ``[0, duration_s)``."""
-    rng = random.Random(seed)
+    """Open-loop agent-task arrivals over ``[0, duration_s)``.
+
+    Arrival times and task contents come from separate random streams, so the
+    arrival process does not shift when the task mix changes.
+    """
+    arrivals = random.Random(f"agentserve/{seed}/arrivals")
+    rng = random.Random(f"agentserve/{seed}/tasks")
     weights = [c.weight for c in config.classes]
     tasks: list[AgentTaskSpec] = []
-    t = rng.expovariate(config.arrival_rate_per_s)
-    while t < duration_s:
+    for t in _arrival_times(config, arrivals, duration_s):
         cls = rng.choices(config.classes, weights=weights)[0]
         tasks.append(AgentTaskSpec(
             task_id=len(tasks),
@@ -76,8 +101,33 @@ def generate(config: WorkloadConfig, *, duration_s: float, seed: int) -> list[Ag
             initial_prompt=_tokens(rng, cls.initial_context_tokens),
             steps=_steps(rng, cls),
         ))
-        t += rng.expovariate(config.arrival_rate_per_s)
     return tasks
+
+
+def _arrival_times(config: WorkloadConfig, rng: random.Random, duration_s: float) -> list[float]:
+    rate = config.arrival_rate_per_s
+    if config.arrival_mode == "poisson":
+        return _poisson(rng, rate, 0.0, duration_s)
+    on, off = config.burst_on_s, config.burst_off_s
+    on_rate = rate * (on + off) / on
+    times: list[float] = []
+    t = 0.0
+    is_on = rng.random() < on / (on + off)  # start in the stationary state
+    while t < duration_s:
+        end = min(duration_s, t + rng.expovariate(1.0 / (on if is_on else off)))
+        if is_on:
+            times += _poisson(rng, on_rate, t, end)
+        t, is_on = end, not is_on
+    return times
+
+
+def _poisson(rng: random.Random, rate: float, start: float, end: float) -> list[float]:
+    times = []
+    t = start + rng.expovariate(rate)
+    while t < end:
+        times.append(t)
+        t += rng.expovariate(rate)
+    return times
 
 
 def _steps(rng: random.Random, cls: TaskClass) -> tuple[AgentStepSpec, ...]:
