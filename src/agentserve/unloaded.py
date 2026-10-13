@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -85,11 +85,17 @@ def cached(key: dict[str, Any], cache_dir: Path | None,
     if path.exists():
         entry = json.loads(path.read_text())
         if entry["key"] == key:
-            return [UnloadedRecord(**r) for r in entry["records"]]
+            # Only the measurement is cached; task SLOs and hard timeouts are re-derived.
+            return [UnloadedRecord.from_measurement(r["task_id"], r["task_class"],
+                                                    r["unloaded_completion_s"], r["failure"])
+                    for r in entry["records"]]
     records = measure_fn()
     cache_dir.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"key": key, "records": [asdict(r) for r in records]},
-                               indent=1, sort_keys=True) + "\n")
+    measured = [{"task_id": r.task_id, "task_class": r.task_class,
+                 "unloaded_completion_s": r.unloaded_completion_s, "failure": r.failure}
+                for r in records]
+    path.write_text(json.dumps({"key": key, "records": measured}, indent=1, sort_keys=True)
+                    + "\n")
     return records
 
 
