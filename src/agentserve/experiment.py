@@ -27,13 +27,13 @@ def run_experiment(config: dict[str, Any], run_dir: Path) -> None:
 
     workload = WorkloadConfig(
         arrival_rate_per_s=config["workload"]["arrival_rate_per_s"],
-        classes=tuple(TaskClass(**c) for c in config["workload"]["classes"]),
+        classes=tuple(TaskClass.from_config(c) for c in config["workload"]["classes"]),
     )
     tasks = generate(workload, duration_s=run["duration_s"], seed=run["seed"])
     runtime = SimulatedRuntime(clock, n_slots=runtime_cfg["n_slots"],
                                prompt_token_s=runtime_cfg["prompt_token_s"],
                                output_token_s=runtime_cfg["output_token_s"])
-    recorder = Recorder(run_dir, config)
+    recorder = Recorder(run_dir, config, record_prompts=run.get("record_prompts", False))
     try:
         proxy = Proxy(policy=build_policy(policy_cfg["name"], concurrency=policy_cfg["concurrency"]),
                       runtime=runtime, clock=clock, recorder=recorder,

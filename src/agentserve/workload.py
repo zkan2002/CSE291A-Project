@@ -21,10 +21,20 @@ class TaskClass:
     weight: float
     initial_context_tokens: int
     output_tokens: int
-    steps: int
-    tool_result_tokens: int
-    tool_delay_median_s: float
-    tool_delay_sigma: float
+    """``n_predict`` of every agent step (EOS ignored, so outputs have exactly this length)."""
+    steps: tuple[int, int]
+    """Inclusive range; each agent task draws its number of agent steps uniformly from it."""
+    tool_result_tokens: int = 200
+    tool_delay_median_s: float = 1.0
+    tool_delay_sigma: float = 0.5
+    """Log-normal shape: the tool delay is ``median * exp(sigma * Z)``."""
+
+    @classmethod
+    def from_config(cls, c: dict) -> TaskClass:
+        c = dict(c)
+        steps = c.pop("steps")
+        c["steps"] = (steps, steps) if isinstance(steps, int) else (steps[0], steps[1])
+        return cls(**c)
 
 
 @dataclass(frozen=True)
@@ -64,10 +74,15 @@ def generate(config: WorkloadConfig, *, duration_s: float, seed: int) -> list[Ag
             task_class=cls.name,
             arrival_s=t,
             initial_prompt=_tokens(rng, cls.initial_context_tokens),
-            steps=tuple(_step(rng, cls, last=(k == cls.steps - 1)) for k in range(cls.steps)),
+            steps=_steps(rng, cls),
         ))
         t += rng.expovariate(config.arrival_rate_per_s)
     return tasks
+
+
+def _steps(rng: random.Random, cls: TaskClass) -> tuple[AgentStepSpec, ...]:
+    n = rng.randint(*cls.steps)
+    return tuple(_step(rng, cls, last=(k == n - 1)) for k in range(n))
 
 
 def _step(rng: random.Random, cls: TaskClass, *, last: bool) -> AgentStepSpec:
