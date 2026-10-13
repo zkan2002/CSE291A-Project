@@ -1,0 +1,42 @@
+# Short experiment against the real pinned llama-server (ticket #7).
+#   python -m uv run agentserve run configs/real-smoke.toml --out results/real-smoke
+#   python -m uv run agentserve analyze results/real-smoke
+# The run launches the server from [server], samples it every 100 ms, and stops it at the end.
+
+[run]
+seed = 1
+duration_s = 20           # arrivals are released over [0, duration_s); the run then drains
+
+[workload]
+arrival_rate_per_s = 0.5  # open-loop Poisson
+
+[[workload.classes]]
+name = "short-few"
+weight = 1.0
+initial_context_tokens = 500
+output_tokens = 32        # n_predict for every agent step
+steps = 3
+tool_result_tokens = 200
+tool_delay_median_s = 0.5 # log-normal tool delay
+tool_delay_sigma = 0.5
+
+[policy]
+name = "task_level_fifo"
+concurrency = 4
+
+[runtime]
+kind = "llama_server"     # memory budget and slot count come from [server]
+request_timeout_s = 300
+sample_interval_s = 0.1
+
+[server]
+binary = "C:/CSE291A/artifacts/llama.cpp/b11606/llama-server.exe"
+model = "C:/CSE291A/artifacts/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+host = "127.0.0.1"
+port = 8092
+memory_budget = 8192      # KV-pool token capacity (-c, with --kv-unified)
+slots = 4                 # -np
+gpu_layers = 99
+cache_ram_mib = 0         # resident cache policy: retained context stays in the pool,
+cache_idle_slots = false  # and agent tasks are pinned with id_slot
+cache_prompt = true

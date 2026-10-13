@@ -3,7 +3,7 @@
 A clock decides how an experiment's asyncio program is driven. Inside it, code
 only ever uses ``clock.now()`` and ``await clock.sleep(seconds)``.
 
-- ``RealClock`` runs on a normal event loop: wall time, for real experiments.
+- ``RealClock`` runs on a normal event loop: wall time (``perf_counter``), for real experiments.
 - ``VirtualClock`` runs on an event loop whose time jumps straight to the next
   scheduled timer whenever nothing is ready, so ten simulated minutes take
   milliseconds and are fully deterministic.
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import selectors
+import time
 from typing import Any, Coroutine, Protocol, TypeVar
 
 T = TypeVar("T")
@@ -45,9 +46,28 @@ class _LoopClock:
         return wrapper()
 
 
-class RealClock(_LoopClock):
+class RealClock:
+    """Wall time from ``time.perf_counter``: the event loop's own clock ticks in
+    ~15.6 ms steps on Windows, too coarse to time model requests."""
+
+    _origin = 0.0
+
+    def now(self) -> float:
+        return time.perf_counter() - self._origin
+
+    async def sleep(self, seconds: float) -> None:
+        # the loop's timers may fire up to one of its ticks early; never wake before the deadline
+        deadline = self.now() + seconds
+        await asyncio.sleep(max(0.0, seconds))
+        while (remaining := deadline - self.now()) > 0:
+            await asyncio.sleep(remaining)
+
     def run(self, main: Coroutine[Any, Any, T]) -> T:
-        return asyncio.run(self._start(main))
+        async def wrapper() -> T:
+            self._origin = time.perf_counter()
+            return await main
+
+        return asyncio.run(wrapper())
 
 
 class VirtualClock(_LoopClock):

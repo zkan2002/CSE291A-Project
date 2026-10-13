@@ -61,8 +61,19 @@ def completion_payload(
     }
 
 
-def parse_completion(status: int, body: Any) -> Completion | RuntimeError_:
+def parse_completion(status: int, body: Any, n_predict: int | None = None) -> Completion | RuntimeError_:
+    """Map one `/completion` response to a completion or a typed error.
+
+    With ``n_predict`` given, a completion with fewer output tokens is an
+    ``exceeds_context`` error: the server silently truncates when prompt +
+    ``n_predict`` doesn't fit the pool (HTTP 200, ``truncated: true``).
+    """
     if status == 200 and isinstance(body, dict) and "error" not in body:
+        if n_predict is not None and (body["tokens_predicted"] < n_predict or body.get("truncated")):
+            return RuntimeError_(
+                kind="exceeds_context", status=status, body=body,
+                message=f"output truncated: {body['tokens_predicted']} of {n_predict} tokens",
+            )
         timings = body.get("timings", {})
         return Completion(
             id_slot=body["id_slot"],
