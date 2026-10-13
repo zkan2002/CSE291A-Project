@@ -1,0 +1,32 @@
+# Pinned environment for every experiment (spec #1, ADR-0002). See docs/environment.md.
+
+[llama_cpp]
+release_tag = "b11606"
+commit = "1b70350c92563449576bcbbf552994b1d1ed847d"
+asset = "llama-b11606-bin-win-cuda-13.4-x64.zip"
+asset_sha256 = "93ba7c16d1ad8343248d540bb4c06e7e18f7d0601e762d6952bad13628295be8"
+cudart_asset = "cudart-llama-bin-win-cuda-13.4-x64.zip"
+cudart_asset_sha256 = "738f8c251ac22b70c3ae6f83a10cf222725df0395246a2cf58f32bdb85fbe668"
+server_version = "0.6.0-dev (build 11606, commit 1b70350c9)"
+# the source reading in spec #1 was done at ff026f8, the direct child of this commit
+source_reading_commit = "ff026f8c0a97fe80649f34763432c9d40b418622"
+
+[model]
+name = "Llama-3.2-3B-Instruct Q4_K_M"
+hf_repo = "bartowski/Llama-3.2-3B-Instruct-GGUF"
+hf_revision = "5ab33fa94d1d04e903623ae72c95d1696f09f9e8"
+file = "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+size_bytes = 2019377696
+sha256 = "6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff"
+kv_cache_type = "f16"
+
+[machine]
+gpu = "NVIDIA GeForce RTX 3060 Ti (8192 MiB)"
+nvidia_driver = "617.14"
+cuda_driver_api = "13.4"   # "CUDA UMD Version" reported by nvidia-smi
+cuda_runtime = "13.4"      # cudart shipped with the release asset
+cpu = "AMD Ryzen 9 5900X"
+ram_gb = 32
+os = "Windows 10 Home 10.0.19045"
+python = "3.11.0"
+uv = "0.13.0"
