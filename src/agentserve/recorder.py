@@ -23,6 +23,7 @@ class RequestRecord:
     completed_s: float
     n_prompt_tokens: int
     n_cached_tokens: int | None
+    n_predict: int
     n_output_tokens: int
     slot: int | None
     error: str | None

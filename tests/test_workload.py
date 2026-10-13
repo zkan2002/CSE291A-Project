@@ -84,3 +84,14 @@ def test_every_agent_step_prompt_extends_the_previous_one_by_its_output_and_a_to
             assert grown == n_output + 200  # previous output, then the tool result
         for s in steps:
             assert len(s["prompt_tokens"]) == requests[(task_id, s["step"])]["n_prompt_tokens"]
+
+
+def test_every_recorded_output_length_equals_its_n_predict(tmp_path):
+    run_dir = run(tmp_path, write_config(tmp_path))
+
+    requests = read_jsonl(run_dir / "requests.jsonl")
+    tasks = {t["task_id"]: t for t in read_jsonl(run_dir / "tasks.jsonl")}
+    assert requests
+    for r in requests:
+        assert r["n_output_tokens"] == r["n_predict"]
+        assert r["n_predict"] == {"short": 50, "long": 400}[tasks[r["task_id"]]["task_class"]]
