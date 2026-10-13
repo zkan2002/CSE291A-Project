@@ -1,0 +1,31 @@
+# Tracer experiment: one agent-task class, task-level admission FIFO, simulated runtime.
+#   python -m uv run agentserve run configs/tracer.toml --out results/tracer
+#   python -m uv run agentserve analyze results/tracer
+
+[run]
+seed = 1
+duration_s = 600          # arrivals are released over [0, duration_s); the run then drains
+
+[workload]
+arrival_rate_per_s = 0.5  # open-loop Poisson
+
+[[workload.classes]]
+name = "short-few"
+weight = 1.0
+initial_context_tokens = 500
+output_tokens = 50        # n_predict for every agent step
+steps = 3
+tool_result_tokens = 200
+tool_delay_median_s = 1.0 # log-normal tool delay
+tool_delay_sigma = 0.5
+
+[policy]
+name = "task_level_fifo"
+concurrency = 4
+
+[runtime]
+kind = "simulated"
+n_slots = 4
+memory_budget_tokens = 32768  # KV-pool token capacity (ADR-0001); not enforced yet
+prompt_token_s = 0.0002       # simulated prompt processing time per uncached token
+output_token_s = 0.01         # simulated decode time per output token

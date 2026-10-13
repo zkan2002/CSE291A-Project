@@ -7,6 +7,9 @@ dependencies = [
     "httpx>=0.28.1",
 ]
 
+[project.scripts]
+agentserve = "agentserve.cli:main"
+
 [dependency-groups]
 dev = ["pytest>=8"]
 
