@@ -153,3 +153,6 @@ class _TaskSink:
 
     def decision(self, **_) -> None:
         pass
+
+    def kv(self, **_) -> None:
+        pass

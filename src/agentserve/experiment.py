@@ -68,7 +68,8 @@ def run_experiment(config: dict[str, Any], run_dir: Path, *,
                       runtime=runtime, clock=clock, recorder=recorder,
                       memory_budget_tokens=cfg.memory_budget_tokens(config),
                       n_slots=cfg.slots(config),
-                      hard_timeouts={t: r.hard_timeout_s for t, r in targets.items()})
+                      hard_timeouts={t: r.hard_timeout_s for t, r in targets.items()},
+                      kv_probe=lambda: runtime.kv_tokens)
         clock.run(proxy.run(tasks))
     finally:
         recorder.close()

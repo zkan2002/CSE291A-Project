@@ -17,7 +17,7 @@ metric is reported as its mean across seeds with a 95% confidence interval
   launch to healthy, and the first and last of its first model requests. Kept apart
   from every steady-state metric.
 - ``goodput_vs_arrival_rate.png``, ``latency_vs_n.png``, ``memory_over_time.png``,
-  ``failure_rate_vs_n.png``, ``cached_tokens_by_policy.png``.
+  ``kv_occupancy_over_time.png``, ``failure_rate_vs_n.png``, ``cached_tokens_by_policy.png``.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 from agentserve.analysis import (Configuration, Estimate, MetricWindow, RunAnalysis,  # noqa: E402
                                  aggregate, config_params, read_jsonl, summarize)
-from agentserve.recorder import COLD_START_FILE, SAMPLES_FILE, TASKS_FILE  # noqa: E402
+from agentserve.recorder import COLD_START_FILE, KV_FILE, SAMPLES_FILE, TASKS_FILE  # noqa: E402
 from agentserve.sweep import PARTIAL_SUFFIX  # noqa: E402
 
 PARAMS = ("policy", "concurrency", "memory_budget_tokens", "arrival_rate_per_s", "cache_policy")
@@ -50,6 +50,7 @@ HEADLINE = (
     ("queueing_mean_s", "queueing s"),
     ("peak_vram_mib", "peak VRAM MiB"),
     ("peak_host_ram_mib", "peak host RAM MiB"),
+    ("peak_kv_admitted_tokens", "peak admitted KV tokens"),
     ("failure_rate", "failure rate"),
     ("cached_token_fraction", "cached fraction"),
     ("policy_overhead_mean_us", "policy overhead µs"),
@@ -110,6 +111,7 @@ def write_report(paths: list[Path], out_dir: Path,
     _plot_vs(configs, "concurrency", [("failure_rate", "failed tasks / all agent tasks")],
              "Failure rate vs N", "N (concurrency)", out_dir / "failure_rate_vs_n.png")
     _plot_memory(configs, out_dir / "memory_over_time.png")
+    _plot_kv(configs, out_dir / "kv_occupancy_over_time.png")
     _plot_cached(configs, out_dir / "cached_tokens_by_policy.png")
     return configs
 
@@ -341,6 +343,38 @@ def _plot_memory(configs: list[Configuration], path: Path) -> None:
                 drawn += 1
         if not drawn:
             _empty(ax, "no system samples (simulated runs)")
+        elif drawn > 1:
+            ax.legend(frameon=False, fontsize=8)
+    _save(fig, path)
+
+
+def _plot_kv(configs: list[Configuration], path: Path) -> None:
+    """KV occupancy over time, the lowest seed of each configuration: the token
+    footprint the proxy admitted (every run) and the pool's own occupancy (simulated
+    runs only; the server does not report it), with the memory budget dotted."""
+    keys = _varying(configs)
+    fig, axes = _axes(2, "KV occupancy over time (lowest seed of each configuration)")
+    panels = (("admitted_tokens", "admitted footprint (tokens, proxy)"),
+              ("runtime_kv_tokens", "KV pool occupancy (tokens, simulated runtime)"))
+    for ax, (field, ylabel) in zip(axes, panels):
+        ax.set_xlabel("time since experiment start (s)", color=INK)
+        ax.set_ylabel(ylabel, color=INK)
+        drawn = 0
+        for i, c in enumerate(configs):
+            points = [(k["t_s"], k[field]) for k in read_jsonl(c.runs[0].run_dir / KV_FILE)
+                      if k.get(field) is not None]
+            if not points:
+                continue
+            style = _style(i)
+            ax.plot([t for t, _ in points], [v for _, v in points], drawstyle="steps-post",
+                    linewidth=1.5, label=_label(c.params, keys) or "all runs", **style)
+            budget = c.params.get("memory_budget_tokens")
+            if budget:
+                ax.axhline(budget, color=style["color"], linestyle=":", linewidth=1)
+            drawn += 1
+        if not drawn:
+            _empty(ax, "not recorded" if field == "admitted_tokens"
+                   else "not reported by the server (real runs)")
         elif drawn > 1:
             ax.legend(frameon=False, fontsize=8)
     _save(fig, path)

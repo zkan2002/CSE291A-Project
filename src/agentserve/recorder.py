@@ -18,6 +18,7 @@ METADATA_FILE = "metadata.json"
 SERVER_LOG_FILE = "server.log"
 WINDOW_FILE = "window.json"
 COLD_START_FILE = "cold_start.json"
+KV_FILE = "kv.jsonl"
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,7 @@ class Recorder:
         self._tasks = _open(run_dir / TASKS_FILE)
         self._prompts = _open(run_dir / PROMPTS_FILE) if record_prompts else None
         self._decisions = _open(run_dir / DECISIONS_FILE)
+        self._kv = _open(run_dir / KV_FILE)
         self._samples = None
 
     def request(self, record: RequestRecord) -> None:
@@ -91,6 +93,15 @@ class Recorder:
         were pending and admitted."""
         _write_line(self._decisions, {"t_s": t_s, "decision_s": decision_s,
                                       "n_pending": n_pending, "n_admitted": n_admitted})
+
+    def kv(self, *, t_s: float, admitted_tokens: int, in_flight_tokens: int,
+           retained_tokens: int, runtime_kv_tokens: int | None) -> None:
+        """KV occupancy at a change: the token footprint the proxy has admitted (in
+        flight plus pinned retained context) and, if known, the runtime's own."""
+        _write_line(self._kv, {"t_s": t_s, "admitted_tokens": admitted_tokens,
+                               "in_flight_tokens": in_flight_tokens,
+                               "retained_tokens": retained_tokens,
+                               "runtime_kv_tokens": runtime_kv_tokens})
 
     def system_sample(self, sample: dict[str, Any]) -> None:
         """One system sample (real runs only; the file is created on the first sample)."""
@@ -120,6 +131,7 @@ class Recorder:
         self._requests.close()
         self._tasks.close()
         self._decisions.close()
+        self._kv.close()
         for f in (self._prompts, self._samples):
             if f is not None:
                 f.close()

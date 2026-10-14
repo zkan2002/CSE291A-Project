@@ -109,7 +109,8 @@ def test_same_config_and_seed_produce_identical_recorded_output(tmp_path):
     main(["run", str(config), "--out", str(first)])
     main(["run", str(config), "--out", str(second)])
 
-    for name in ("config.json", "requests.jsonl", "tasks.jsonl"):
+    for name in ("config.json", "window.json", "requests.jsonl", "tasks.jsonl",
+                 "unloaded.jsonl", "kv.jsonl"):
         assert (first / name).read_bytes() == (second / name).read_bytes(), name
 
 

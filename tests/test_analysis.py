@@ -193,13 +193,47 @@ def test_peak_memory_cached_tokens_and_policy_overhead(tmp_path, capsys):
     assert m["policy_overhead_total_ms"] == pytest.approx(0.1)
 
 
+def kv(t, admitted, runtime=None):
+    return {"t_s": t, "admitted_tokens": admitted, "in_flight_tokens": admitted,
+            "retained_tokens": 0, "runtime_kv_tokens": runtime}
+
+
+def test_peak_kv_occupancy_over_the_period_the_measured_agent_tasks_run(tmp_path, capsys):
+    run_dir = tmp_path / "run"
+    write_run(run_dir, [task(0, 0.0, 5.0), task(1, 10.0, 30.0), task(2, 20.0, 25.0)])
+    write_jsonl(run_dir / "kv.jsonl", [
+        kv(0.0, 9000, 9500),   # warm-up only
+        kv(8.0, 3000, 2900),   # still in effect when the window opens at 10 s
+        kv(12.0, 2000, 4000),
+        kv(29.0, 2500, 2400),  # the drain
+        kv(31.0, 9999, 9999),  # after the last measured agent task completed
+    ])
+
+    m = analyze(run_dir, capsys, MetricWindow(start_s=10.0, end_s=20.5))
+
+    assert m["peak_kv_admitted_tokens"] == 3000
+    assert m["peak_kv_runtime_tokens"] == 4000
+
+
+def test_kv_occupancy_the_runtime_does_not_report_is_nan(tmp_path, capsys):
+    run_dir = tmp_path / "run"
+    write_run(run_dir, [task(0, 0.0, 10.0)])
+    write_jsonl(run_dir / "kv.jsonl", [kv(0.0, 500), kv(5.0, 0)])  # a real run
+
+    m = analyze(run_dir, capsys)
+
+    assert m["peak_kv_admitted_tokens"] == 500
+    assert math.isnan(m["peak_kv_runtime_tokens"])
+
+
 def test_runs_without_system_samples_or_decision_times_report_nan(tmp_path, capsys):
     run_dir = tmp_path / "run"
     write_run(run_dir, [task(0, 0.0, 10.0)])
 
     m = analyze(run_dir, capsys)
 
-    for name in ("peak_vram_mib", "peak_host_ram_mib", "policy_overhead_mean_us"):
+    for name in ("peak_vram_mib", "peak_host_ram_mib", "policy_overhead_mean_us",
+                 "peak_kv_admitted_tokens", "peak_kv_runtime_tokens"):
         assert math.isnan(m[name]), name
 
 
@@ -384,7 +418,7 @@ def test_five_seeds_use_t_with_four_degrees_of_freedom(tmp_path):
 
 
 PLOTS = ("goodput_vs_arrival_rate.png", "latency_vs_n.png", "memory_over_time.png",
-         "failure_rate_vs_n.png", "cached_tokens_by_policy.png")
+         "kv_occupancy_over_time.png", "failure_rate_vs_n.png", "cached_tokens_by_policy.png")
 
 
 def read_csv(path: Path) -> list[dict]:
@@ -400,6 +434,7 @@ def test_one_command_regenerates_every_table_and_plot_from_run_directories(tmp_p
         write_seed_run(run_dir, seed, completed)
         write_jsonl(run_dir / "samples.jsonl", [sample(0.0, 3000, 500), sample(1.0, 3500, 520)])
         write_jsonl(run_dir / "decisions.jsonl", [decision(0.0, 10e-6)])
+        write_jsonl(run_dir / "kv.jsonl", [kv(0.0, 300, 200), kv(1.0, 0, 200)])
     write_seed_run(sweep / "n8" / "seed1", 1, 5, concurrency=8)
     out = tmp_path / "report"
 

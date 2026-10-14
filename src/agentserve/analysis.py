@@ -32,8 +32,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agentserve import config as cfg
-from agentserve.recorder import (DECISIONS_FILE, REQUESTS_FILE, SAMPLES_FILE, TASKS_FILE,
-                                 UNLOADED_FILE, WINDOW_FILE)
+from agentserve.recorder import (DECISIONS_FILE, KV_FILE, REQUESTS_FILE, SAMPLES_FILE,
+                                 TASKS_FILE, UNLOADED_FILE, WINDOW_FILE)
 from agentserve.workload import TaskClass, WorkloadConfig
 
 _MIB = 1024 * 1024
@@ -101,6 +101,7 @@ def summarize(run_dir: Path, window: MetricWindow | None = None) -> RunAnalysis:
     m.update(_failures(tasks))
     running = _running_period(window, tasks)
     m.update(_memory([s for s in read_jsonl(run_dir / SAMPLES_FILE) if running(s["t_s"])]))
+    m.update(_kv_occupancy(read_jsonl(run_dir / KV_FILE), window.start_s, running))
     m.update(_cached_tokens(requests))
     m.update(_policy_overhead(
         [d for d in read_jsonl(run_dir / DECISIONS_FILE) if running(d["t_s"])]))
@@ -314,6 +315,20 @@ def _memory(samples: list[dict]) -> Metrics:
 
     return {"peak_vram_mib": peak_mib("vram_used_bytes"),
             "peak_host_ram_mib": peak_mib("server_rss_bytes")}
+
+
+def _kv_occupancy(lines: list[dict], start_s: float, running) -> Metrics:
+    """Peak KV occupancy in tokens over the running period. ``kv.jsonl`` records
+    changes only, so the line in effect when the period starts counts too."""
+    before = [k for k in lines if k["t_s"] < start_s]
+    lines = before[-1:] + [k for k in lines if running(k["t_s"])]
+
+    def peak(field: str) -> float:
+        values = [k[field] for k in lines if k.get(field) is not None]
+        return max(values) if values else math.nan
+
+    return {"peak_kv_admitted_tokens": peak("admitted_tokens"),
+            "peak_kv_runtime_tokens": peak("runtime_kv_tokens")}
 
 
 def _cached_tokens(requests: list[dict]) -> Metrics:

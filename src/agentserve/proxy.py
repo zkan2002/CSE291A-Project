@@ -6,6 +6,14 @@ The proxy never retries a failed model request: the first runtime failure
 ends the agent task as a failed task. So does its hard timeout, counted from
 its arrival: the model request it is waiting on (queued or in flight) is
 cancelled and recorded with the error ``timeout``.
+
+The server does not report KV occupancy (pilot amendment 7), so the proxy
+tracks the token footprint it has admitted: each model request in flight
+(prompt plus ``n_predict``), plus the retained context of each agent task under
+way whose last model request was pinned to a slot and succeeded (prompt plus
+output), until that slot is given to another model request or the agent task
+ends. Every change is recorded (``Recorder.kv``), with the runtime's own
+occupancy beside it when ``kv_probe`` gives one (the simulated runtime).
 """
 
 from __future__ import annotations
@@ -13,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import Callable, Mapping
 
 from agentserve.clock import Clock
 from agentserve.policy import (ActiveRequest, AdmissionPolicy, PendingRequest,
@@ -32,9 +40,11 @@ class _Waiting:
 class Proxy:
     def __init__(self, *, policy: AdmissionPolicy, runtime: Runtime, clock: Clock,
                  recorder: Recorder, memory_budget_tokens: int, n_slots: int,
-                 hard_timeouts: Mapping[int, float | None] | None = None) -> None:
+                 hard_timeouts: Mapping[int, float | None] | None = None,
+                 kv_probe: Callable[[], int] | None = None) -> None:
         """``hard_timeouts``: per agent task (by task ID), seconds from its arrival
-        after which it fails with cause ``timeout``; None or absent = no timeout."""
+        after which it fails with cause ``timeout``; None or absent = no timeout.
+        ``kv_probe``: the runtime's own KV-pool occupancy in tokens, if it knows it."""
         self._policy = policy
         self._runtime = runtime
         self._clock = clock
@@ -45,6 +55,10 @@ class Proxy:
         self._waiting: list[_Waiting] = []
         self._active: dict[RequestRef, ActiveRequest] = {}
         self._admitted_tasks: dict[int, int | None] = {}
+        self._retained: dict[int, tuple[int, int]] = {}
+        """Agent task -> (slot, tokens) of the retained context it has pinned there."""
+        self._kv_probe = kv_probe
+        self._last_kv: dict | None = None
 
     async def run(self, tasks: list[AgentTaskSpec]) -> None:
         running = []
@@ -67,6 +81,8 @@ class Proxy:
         except RuntimeFailure as e:
             failure = e.kind
         self._admitted_tasks.pop(spec.task_id, None)
+        self._retained.pop(spec.task_id, None)
+        self._record_kv()
         self._recorder.task(TaskRecord(
             task_id=spec.task_id, task_class=spec.task_class, arrived_s=arrived,
             step_admitted_s=step_admitted, completed_s=self._clock.now(), failure=failure))
@@ -110,6 +126,7 @@ class Proxy:
         except asyncio.CancelledError:  # hard timeout while queued
             if not waiting.admitted.cancelled():  # admitted in this same instant, never sent
                 del self._active[ref]
+                self._record_kv()
                 self._schedule()
             else:
                 self._waiting.remove(waiting)
@@ -118,6 +135,7 @@ class Proxy:
         admitted = self._clock.now()
         step_admitted.append(admitted)
         pinned = ModelRequest(request.prompt_tokens, request.n_predict, slot)
+        completion = None
         try:
             completion = await self._runtime.submit(pinned)
         except RuntimeFailure as e:
@@ -128,6 +146,10 @@ class Proxy:
             raise
         finally:
             del self._active[ref]
+            if completion is not None and slot is not None:
+                self._retained[task_id] = (slot, len(request.prompt_tokens)
+                                           + len(completion.output_tokens))
+            self._record_kv()
             self._schedule()
         self._record_request(ref, arrived, admitted, request, completion.slot,
                              first_token_s=self._clock.now() - completion.decode_s,
@@ -157,7 +179,26 @@ class Proxy:
             p = waiting.pending
             self._active[p.ref] = ActiveRequest(p.ref, admission.slot, p.n_prompt_tokens, p.n_predict)
             self._admitted_tasks[p.ref.task_id] = admission.slot
+            # its context is now part of the model request in flight; a slot given
+            # to it no longer holds another agent task's retained context
+            self._retained.pop(p.ref.task_id, None)
+            if admission.slot is not None:
+                self._retained = {t: r for t, r in self._retained.items()
+                                  if r[0] != admission.slot}
             waiting.admitted.set_result(admission.slot)
+        if admissions:
+            self._record_kv()
+
+    def _record_kv(self) -> None:
+        """The admitted token footprint, if it (or the runtime's occupancy) changed."""
+        in_flight = sum(a.n_prompt_tokens + a.n_predict for a in self._active.values())
+        retained = sum(n for _, n in self._retained.values())
+        kv = {"admitted_tokens": in_flight + retained, "in_flight_tokens": in_flight,
+              "retained_tokens": retained,
+              "runtime_kv_tokens": None if self._kv_probe is None else self._kv_probe()}
+        if kv != self._last_kv:
+            self._last_kv = kv
+            self._recorder.kv(t_s=self._clock.now(), **kv)
 
     def _record_request(self, ref: RequestRef, arrived: float, admitted: float | None,
                         request: ModelRequest, slot: int | None, *, error: str | None = None,

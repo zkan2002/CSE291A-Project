@@ -11,6 +11,7 @@
 | `unloaded.jsonl` | One line per agent task: its unloaded completion time, task SLO and hard timeout. Written before the experiment starts. |
 | `prompts.jsonl` | Only with `record_prompts = true` under `[run]`: one line per model request, written when it is issued. |
 | `decisions.jsonl` | One line per admission-policy decision, with its wall-clock duration (policy overhead). Not reproducible byte for byte. |
+| `kv.jsonl` | KV occupancy over time: one line whenever the token footprint the proxy has admitted (or, simulated, the pool's own occupancy) changes. |
 
 A **real run** (`[runtime] kind = "llama_server"`) writes the same files in the same format, plus:
 
@@ -156,6 +157,20 @@ The proxy times every call into the admission policy (building its state snapsho
 | `n_pending` | Model requests waiting when the policy was asked. |
 | `n_admitted` | How many of them it admitted. |
 
+## `kv.jsonl`
+
+The server does not report KV occupancy (pilot amendment 7), so the proxy tracks the token footprint it has admitted, on every run, and writes a line (on the run clock) whenever it changes:
+
+| Field | Meaning |
+| --- | --- |
+| `t_s` | Run-clock time of the change. |
+| `in_flight_tokens` | Prompt plus `n_predict` of every model request admitted and not yet finished: the most it can need in the pool. |
+| `retained_tokens` | Retained context the proxy has pinned: for each agent task under way whose last model request was pinned to a slot and succeeded, its prompt plus output, until that slot is given to another model request or the agent task ends. Unpinned context (the offload cache policy) is not counted: the proxy cannot know whether it is still in the pool. |
+| `admitted_tokens` | `in_flight_tokens + retained_tokens`. |
+| `runtime_kv_tokens` | Simulated runs: the simulated pool's own occupancy at that instant, as ground truth (it differs from the admitted footprint: a model request uses its `n_predict` cells only as it decodes, and a slot keeps a finished agent task's tokens until they are overwritten or purged). `null` on a real run. |
+
+The proxy's footprint is an estimate, not the server's state: it is what an admission policy could know. On the virtual clock the file is reproducible byte for byte.
+
 ## `samples.jsonl` (real runs)
 
 | Field | Meaning |
@@ -165,7 +180,7 @@ The proxy times every call into the admission policy (building its state snapsho
 | `server_rss_bytes` | Resident host RAM of the llama-server process (the working set, on Windows). |
 | `slots` | The server's `/slots` view: per slot `id`, `is_processing`, and `n_prompt_tokens` of its last task. |
 
-A source that fails at a tick records `null` for that tick. The server does not report KV occupancy (see the pilot findings), and `slots` doesn't give it either: KV footprints come from `requests.jsonl`.
+A source that fails at a tick records `null` for that tick. The server does not report KV occupancy (see the pilot findings), and `slots` doesn't give it either: KV occupancy comes from `kv.jsonl`.
 
 ## `metadata.json` (real runs)
 
@@ -188,7 +203,7 @@ agentserve analyze RUN_DIR [--window-start S] [--window-end S]
 agentserve report PATH... --out REPORT_DIR [--window-start S] [--window-end S]
 ```
 
-`analyze` prints one run's metrics. `report` regenerates every table and plot from raw run directories: each `PATH` is a run directory or a directory holding run directories at any depth. Runs whose `config.json` differ only in `run.seed` form one *configuration*, and each metric is reported as its mean across seeds with the half-width of a 95% confidence interval (Student's t, n − 1 degrees of freedom; a single seed has none). `REPORT_DIR` gets `runs.csv` (per run), `configurations.csv` and `classes.csv` (`<metric>_mean`, `_ci95`, `_n` per configuration, and per configuration and task class, plus `_n_nan`: the seeds left out of the estimate because their value was `nan`, such as a latency with no completed agent task), `metrics.md` (the headline table, failure rate by cause and the per-class breakdown; an estimate that left seeds out is marked `(n of N seeds)`) and the plots `goodput_vs_arrival_rate.png`, `latency_vs_n.png`, `memory_over_time.png`, `failure_rate_vs_n.png`, `cached_tokens_by_policy.png`.
+`analyze` prints one run's metrics. `report` regenerates every table and plot from raw run directories: each `PATH` is a run directory or a directory holding run directories at any depth. Runs whose `config.json` differ only in `run.seed` form one *configuration*, and each metric is reported as its mean across seeds with the half-width of a 95% confidence interval (Student's t, n − 1 degrees of freedom; a single seed has none). `REPORT_DIR` gets `runs.csv` (per run), `configurations.csv` and `classes.csv` (`<metric>_mean`, `_ci95`, `_n` per configuration, and per configuration and task class, plus `_n_nan`: the seeds left out of the estimate because their value was `nan`, such as a latency with no completed agent task), `metrics.md` (the headline table, failure rate by cause and the per-class breakdown; an estimate that left seeds out is marked `(n of N seeds)`) and the plots `goodput_vs_arrival_rate.png`, `latency_vs_n.png`, `memory_over_time.png`, `kv_occupancy_over_time.png`, `failure_rate_vs_n.png`, `cached_tokens_by_policy.png`.
 
 **Metric window.** Agent tasks that *arrive* in `[window-start, window-end)` are measured, with their model requests; rates are per minute over the window. System samples, KV occupancy and policy decisions count over the whole period the measured agent tasks run: their `t_s` is from the window's start through the drain, up to the last completion of a measured agent task (inclusive; the window itself if no agent task was measured). By default each run is measured over its recorded `window.json` (the measured window after the warm-up). A run directory without one is measured from 0 with no end, with rates taken up to the last completion of any agent task. In code: `agentserve.analysis.MetricWindow`.
 
@@ -201,6 +216,7 @@ agentserve report PATH... --out REPORT_DIR [--window-start S] [--window-end S]
 | `completion_latency_p50_s`, `_p95_s`, `_p99_s` | Completion minus arrival over completed agent tasks (linear interpolation). |
 | `queueing_mean_s`, `queueing_p95_s` | `admitted_s - arrived_s` per model request, failed ones included (`completed_s - arrived_s` for one never admitted). |
 | `peak_vram_mib`, `peak_host_ram_mib` | Largest `vram_used_bytes` and `server_rss_bytes` sample; `nan` without `samples.jsonl`. |
+| `peak_kv_admitted_tokens`, `peak_kv_runtime_tokens` | Largest `admitted_tokens` and `runtime_kv_tokens` in `kv.jsonl` (the line in effect when the period starts included); `nan` without it, and the runtime's on real runs. |
 | `failure_rate`, `failure_rate.<cause>` | Failed tasks over all measured agent tasks, overall and per cause (the four typed errors always, others when seen). |
 | `cached_tokens_per_request`, `cached_token_fraction` | Over successful model requests: mean `n_cached_tokens`, and cached over prompt tokens. |
 | `policy_decisions`, `policy_overhead_mean_us`, `_p99_us`, `policy_overhead_total_ms` | From `decisions.jsonl`; `nan` without it. |
