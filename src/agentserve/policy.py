@@ -78,6 +78,19 @@ class TaskLevelFifo:
         return admissions
 
 
+class RequestLevelFifo:
+    """Request-level admission: each model request is admitted on its own, in
+    arrival order, with at most ``concurrency`` in flight. After its tool delay
+    an agent task's next step joins the back of the queue."""
+
+    def __init__(self, concurrency: int) -> None:
+        self.concurrency = concurrency
+
+    def decide(self, state: ProxyState) -> list[Admission]:
+        free = self.concurrency - len(state.active)
+        return [Admission(req.ref, None) for req in state.pending[:max(0, free)]]
+
+
 def _unpinned_slot(pinned, n_slots: int) -> int | None:
     taken = set(pinned)
     return next((s for s in range(n_slots) if s not in taken), None)
@@ -86,4 +99,6 @@ def _unpinned_slot(pinned, n_slots: int) -> int | None:
 def build_policy(name: str, *, concurrency: int) -> AdmissionPolicy:
     if name == "task_level_fifo":
         return TaskLevelFifo(concurrency)
+    if name == "request_level_fifo":
+        return RequestLevelFifo(concurrency)
     raise ValueError(f"unknown admission policy: {name!r}")
