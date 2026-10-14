@@ -182,6 +182,37 @@ def test_unloaded_completion_times_are_cached_per_agent_task_across_rates_and_sl
     assert len(list(cache.iterdir())) == 1
 
 
+def test_transient_failures_of_the_unloaded_measurement_are_measured_again(tmp_path):
+    # a real server can fail a model request for reasons that have nothing to do
+    # with the agent task (a lost connection, an HTTP timeout): such a failure must
+    # not stick to the agent task in the cache; failing because it does not fit must
+    from agentserve import unloaded
+    from agentserve.experiment import load_config, workload_tasks
+
+    tasks = workload_tasks(load_config(write_config(tmp_path)))[:5]
+    first = {t.task_id: f for t, f in zip(tasks, [
+        None, "server_error", "timeout", "exceeds_context", "pool_exhausted"])}
+    measured: list[list[int]] = []
+
+    def measure(outcomes):
+        def fn(subset):
+            measured.append([t.task_id for t in subset])
+            return [unloaded.UnloadedRecord.from_measurement(
+                t.task_id, t.task_class, 1.0, outcomes.get(t.task_id)) for t in subset]
+        return fn
+
+    cache = tmp_path / "cache"
+    unloaded.cached({"runtime": "x"}, cache, tasks, measure(first))
+    again = unloaded.cached({"runtime": "x"}, cache, tasks, measure({}))
+
+    transient = [tasks[1].task_id, tasks[2].task_id]
+    assert measured[1] == transient
+    by_id = {r.task_id: r for r in again}
+    assert [by_id[t].failure for t in transient] == [None, None]  # it worked this time
+    assert by_id[tasks[3].task_id].failure == "exceeds_context"  # from the cache
+    assert by_id[tasks[4].task_id].failure == "pool_exhausted"
+
+
 def analyze(run_dir: Path, capsys) -> dict[str, float]:
     capsys.readouterr()
     main(["analyze", str(run_dir)])

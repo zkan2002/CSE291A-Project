@@ -28,11 +28,15 @@ from agentserve.clock import Clock
 from agentserve.policy import TaskLevelFifo
 from agentserve.proxy import Proxy
 from agentserve.recorder import TaskRecord
-from agentserve.runtime import Runtime
+from agentserve.runtime import RequestTimeout, Runtime, ServerError
 from agentserve.workload import AgentTaskSpec
 
 SLO_MULTIPLE = 3.0
 HARD_TIMEOUT_MULTIPLE = 10.0
+TRANSIENT_FAILURES = frozenset({ServerError.kind, RequestTimeout.kind})
+"""Failures of an agent task run alone that say nothing about the agent task (a
+lost connection, an HTTP timeout): never cached. ``exceeds_context`` and
+``pool_exhausted`` alone mean it does not fit, and are."""
 
 
 @dataclass(frozen=True)
@@ -88,8 +92,10 @@ def cached(key: dict[str, Any], cache_dir: Path | None, tasks: list[AgentTaskSpe
     slot count). An agent task is identified by its content (``task_digest``),
     so a run at a higher arrival rate, or with another N, reuses the
     measurements of the agent tasks it shares with earlier runs, and
-    ``measure_fn`` measures only the rest. Returns one record per agent task,
-    in task-ID order."""
+    ``measure_fn`` measures only the rest. Only successes and structural
+    failures (the agent task does not fit, even alone) are cached; a transient
+    failure (``TRANSIENT_FAILURES``) is returned but measured again next time.
+    Returns one record per agent task, in task-ID order."""
     tasks = sorted(tasks, key=lambda t: t.task_id)
     if cache_dir is None:
         return measure_fn(tasks)
@@ -103,13 +109,18 @@ def cached(key: dict[str, Any], cache_dir: Path | None, tasks: list[AgentTaskSpe
     digests = {t.task_id: task_digest(t) for t in tasks}
     missing = [t for t in tasks if digests[t.task_id] not in known]
     if missing:
+        measured = {}
         for r in measure_fn(missing):
-            known[digests[r.task_id]] = {
+            measured[digests[r.task_id]] = {
                 "digest": digests[r.task_id], "task_class": r.task_class,
                 "unloaded_completion_s": r.unloaded_completion_s, "failure": r.failure}
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"key": key, "records": list(known.values())},
-                                   indent=1, sort_keys=True) + "\n")
+        cacheable = {d: r for d, r in measured.items() if r["failure"] not in TRANSIENT_FAILURES}
+        if cacheable:
+            known.update(cacheable)
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"key": key, "records": list(known.values())},
+                                       indent=1, sort_keys=True) + "\n")
+        known = {**known, **measured}
     # Only the measurement is cached; task SLOs and hard timeouts are re-derived.
     return [UnloadedRecord.from_measurement(t.task_id, t.task_class,
                                             known[digests[t.task_id]]["unloaded_completion_s"],
