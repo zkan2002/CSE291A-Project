@@ -360,3 +360,58 @@ def test_five_seeds_use_t_with_four_degrees_of_freedom(tmp_path):
     # 1..5 per minute: mean 3, sample sd sqrt(2.5), t(0.975, df=4) = 2.776445
     assert throughput.mean == pytest.approx(3.0)
     assert throughput.ci95 == pytest.approx(2.776445 * math.sqrt(2.5) / math.sqrt(5), rel=1e-5)
+
+
+PLOTS = ("goodput_vs_arrival_rate.png", "latency_vs_n.png", "memory_over_time.png",
+         "failure_rate_vs_n.png", "cached_tokens_by_policy.png")
+
+
+def read_csv(path: Path) -> list[dict]:
+    import csv
+    with open(path, newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def test_one_command_regenerates_every_table_and_plot_from_run_directories(tmp_path, capsys):
+    sweep = tmp_path / "sweep"
+    for seed, completed in [(1, 2), (2, 4), (3, 6)]:
+        run_dir = sweep / "n4" / f"seed{seed}"
+        write_seed_run(run_dir, seed, completed)
+        write_jsonl(run_dir / "samples.jsonl", [sample(0.0, 3000, 500), sample(1.0, 3500, 520)])
+        write_jsonl(run_dir / "decisions.jsonl", [decision(0.0, 10e-6)])
+    write_seed_run(sweep / "n8" / "seed1", 1, 5, concurrency=8)
+    out = tmp_path / "report"
+
+    assert main(["report", str(sweep), "--out", str(out)]) == 0
+
+    for name in PLOTS:
+        assert (out / name).read_bytes()[:8] == b"\x89PNG\r\n\x1a\n", name
+    runs = read_csv(out / "runs.csv")
+    assert len(runs) == 4
+    configs = read_csv(out / "configurations.csv")
+    assert [(c["concurrency"], c["seeds"]) for c in configs] == [("4", "1 2 3"), ("8", "1")]
+    assert float(configs[0]["throughput_tasks_per_min_mean"]) == pytest.approx(4.0)
+    assert float(configs[0]["throughput_tasks_per_min_ci95"]) == pytest.approx(4.968, abs=1e-3)
+    assert float(configs[0]["policy_overhead_mean_us_mean"]) == pytest.approx(10.0)
+    classes = read_csv(out / "classes.csv")
+    assert {(c["concurrency"], c["task_class"]) for c in classes} == {
+        ("4", "small"), ("4", "huge"), ("8", "small"), ("8", "huge")}
+    table = (out / "metrics.md").read_text(encoding="utf-8")
+    assert "4.000 ± 4.968" in table
+    assert "small" in table and "huge" in table
+
+    # regenerating into the same directory replaces the previous output
+    assert main(["report", str(sweep), "--out", str(out)]) == 0
+    assert len(read_csv(out / "runs.csv")) == 4
+
+
+def test_the_report_takes_a_metric_window(tmp_path):
+    run_dir = tmp_path / "run"
+    write_run(run_dir, [task(0, 0.0, 5.0), task(1, 10.0, 20.0)], config=run_config(1))
+    out = tmp_path / "report"
+
+    main(["report", str(run_dir), "--out", str(out), "--window-start", "10", "--window-end", "40"])
+
+    [run] = read_csv(out / "runs.csv")
+    assert run["agent_tasks"] == "1"
+    assert float(run["throughput_tasks_per_min"]) == pytest.approx(2.0)

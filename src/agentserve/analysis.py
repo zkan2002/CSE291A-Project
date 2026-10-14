@@ -13,8 +13,14 @@ agent task's completion, so every agent task is measured.
   with linearly interpolated percentiles.
 - Queueing time: admission minus proxy arrival, per model request (failed ones included).
 - Failure rate: failed tasks over all agent tasks, overall and per cause.
+- Goodput over fitting classes, peak memory, cached tokens, policy overhead
+  (from ``decisions.jsonl``) and the per-task-class breakdown: see the
+  "Analysis" section of docs/run-directory.md, which defines every metric.
 Failed tasks count in ``agent_tasks`` and every denominator, but never as
 completions; an agent task without a task SLO is never within it.
+
+``aggregate`` groups runs into configurations (config equal apart from the seed)
+and estimates each metric across seeds: mean with a t-based 95% CI.
 """
 
 from __future__ import annotations
