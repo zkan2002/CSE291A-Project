@@ -157,8 +157,12 @@ class SweepResult:
 RunFn = Callable[..., None]
 
 
+def _print(line: str) -> None:
+    print(line, flush=True)
+
+
 def run_sweep(sweep: dict[str, Any], out_dir: Path, *, run: RunFn = run_experiment,
-              log: Callable[[str], None] = print) -> SweepResult:
+              log: Callable[[str], None] = _print) -> SweepResult:
     """Run every cell of ``sweep`` that ``out_dir`` doesn't already hold complete.
 
     A failed cell is recorded and the sweep goes on; an interruption (Ctrl-C) is

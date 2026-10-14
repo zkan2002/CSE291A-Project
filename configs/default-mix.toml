@@ -6,6 +6,7 @@
 [run]
 seed = 1
 split = "dev"             # "dev" for tuning, "eval" for evaluation: the two never share a seed
+warmup_s = 0              # arrivals in [0, warmup_s) run but are not measured (run protocol: 60)
 duration_s = 600          # arrivals are released over [0, duration_s); the run then drains
 record_prompts = false    # true also writes prompts.jsonl (every prompt's token array; large)
 
@@ -32,3 +33,4 @@ prompt_token_s = 0.0002       # simulated prompt processing time per uncached to
 output_token_s = 0.01         # simulated decode time per output token
 cache_ram_tokens = 0          # host-RAM prompt cache (--cache-ram) in tokens; 0 = off
 cache_idle_slots = false      # --cache-idle-slots: offload idle slots to host RAM (needs cache_ram_tokens)
+cache_prompt = true           # false = --no-cache-prompt: caching off, retained context never reused

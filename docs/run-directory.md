@@ -5,6 +5,7 @@
 | File | Contents |
 | --- | --- |
 | `config.json` | The full resolved config the run used (keys sorted). |
+| `window.json` | The measured window, `{"start_s": warmup_s, "end_s": duration_s}` (see *Run protocol*). |
 | `requests.jsonl` | One line per model request, written when it completes or fails. |
 | `tasks.jsonl` | One line per agent task, written when it completes or fails. |
 | `unloaded.jsonl` | One line per agent task: its unloaded completion time, task SLO and hard timeout. Written before the experiment starts. |
@@ -18,9 +19,24 @@ A **real run** (`[runtime] kind = "llama_server"`) writes the same files in the 
 | `samples.jsonl` | One system sample every `sample_interval_s` (default 0.1 s) while the experiment runs. |
 | `metadata.json` | What the run was measured on: llama.cpp build, model hash, GPU, driver and CUDA versions, harness commit, launch arguments. |
 | `server.log` | The experiment's llama-server output. |
-| `unloaded-server.log` | The llama-server output while unloaded completion times were measured (absent when they came from `--unloaded-cache`). |
+| `unloaded-server.log` | The llama-server output while unloaded completion times were measured (absent when they all came from `--unloaded-cache`). |
+| `cold_start.json` | Every server launch of the run, with its cold start (see below). |
+| `cold-start-server.log` | The llama-server output of the cold-start launch. |
 
 All times are seconds since the experiment started, on the run's clock (virtual for the simulated runtime, `perf_counter` wall time for a real run). Lines are JSON objects with sorted keys, so the same config and seed give byte-identical files on the virtual clock. A simulated run never writes the real-run files; the only wall-time measurement in its run directory is `decisions.jsonl`, which is therefore not byte-identical across repeats (every other file is). Nothing is dropped: a failed model request or failed task still gets its line.
+
+## Run protocol
+
+```toml
+[run]
+warmup_s = 60     # arrivals in [0, warmup_s) are the warm-up: run and logged, never measured
+duration_s = 540  # measured arrivals in [warmup_s, duration_s); nothing arrives after it
+```
+
+After the last arrival the run **drains**: it goes on until every agent task has
+completed, failed or hit its hard timeout. The window `[warmup_s, duration_s)` is
+written to `window.json`, and `analyze` and `report` measure each run over its own
+recorded window unless given `--window-start`/`--window-end`. `warmup_s` defaults to 0.
 
 ## Admission policy and failure accounting
 
@@ -49,7 +65,7 @@ request_timeout_s = 600   # HTTP timeout per model request; recorded as `timeout
 sample_interval_s = 0.1
 ```
 
-The run (1) writes `metadata.json`; (2) measures unloaded completion times on a fresh server, unless cached; (3) launches a **fresh** server for the experiment, so nothing from (2) is retained in its KV pool or prompt cache; (4) runs the proxy and the sampler on the real clock; (5) stops the server, even on failure.
+The run (1) writes `metadata.json`; (2) launches a **cold-start** server, measures its cold start and stops it; (3) measures unloaded completion times on a fresh server (warmed by the same probes first), unless all are cached; (4) launches a **fresh** server for the experiment, so nothing from (2) or (3) is retained in its KV pool or prompt cache; (5) runs the proxy and the sampler on the real clock; (6) stops the server, even on failure. Every launch is a restart: each server is stopped before the next starts.
 
 The adapter (`agentserve.llama_runtime`) sends each model request to `/completion` as a token array with `n_predict`, `ignore_eos`, `id_slot` (−1 when the policy leaves the slot to the server) and `cache_prompt`. `n_cached_tokens` is the server's `timings.cache_n`, `slot` its `id_slot`, and `first_token_s` uses its `timings.predicted_ms` as the decode time. Errors map to the typed errors found in the pilot ([`pilot/pilot-findings.md`](pilot/pilot-findings.md)):
 
@@ -108,7 +124,15 @@ Before the experiment, every agent task of the workload is run alone on an other
 | `hard_timeout_s` | Hard timeout: 10 x `unloaded_completion_s` (`null` if that is `null`). |
 | `failure` | `null`, or the error that failed the agent task when run alone. |
 
-`agentserve run ... --unloaded-cache DIR` caches the measurement in `DIR`, keyed by the workload, seed, duration, split and runtime config (not the policy), and reuses it on later runs with the same key. Without the flag, it is measured afresh for every run.
+`agentserve run ... --unloaded-cache DIR` caches the measurement in `DIR` **per agent task**: keyed by the agent task's content (its prompts, outputs lengths and tool delays, not its ID or arrival time) and the runtime config, without the slot count, port or admission policy. A later run reuses the measurements of every agent task it shares, and measures only the rest: the same seed at a higher arrival rate draws the same agent tasks first, and running alone, an agent task's time does not depend on N or the slot count. Without the flag, it is measured afresh for every run.
+
+## `cold_start.json` (real runs)
+
+```json
+{"launches": [{"role": "cold_start", "pid": 1234, "startup_s": 2.1, "first_requests": [...]}, ...]}
+```
+
+One entry per server launch, in order: `cold_start` (launched only to be measured), `unloaded` (absent when every unloaded time was cached) and `experiment`. `startup_s` is launch to healthy (model load included). `first_requests` are probe model requests sent right after the launch (3 of them, 512 distinct prompt tokens each, `n_predict` 32): `latency_s`, `prompt_s`, `decode_s`, `n_cached_tokens`. The experiment's server gets no probes, so it starts with an empty KV pool and prompt cache; its own first model requests fall in the warm-up. `report` writes these to `cold_start.csv` and a *Cold start* table, never into the steady-state metrics.
 
 `agentserve analyze` reports *goodput* (agent tasks that did not fail and completed within `slo_s` of arriving, per minute over the same window as throughput) and *SLO attainment* (the fraction of all agent tasks, failed ones included, that count towards goodput).
 
@@ -157,7 +181,7 @@ agentserve report PATH... --out REPORT_DIR [--window-start S] [--window-end S]
 
 `analyze` prints one run's metrics. `report` regenerates every table and plot from raw run directories: each `PATH` is a run directory or a directory holding run directories at any depth. Runs whose `config.json` differ only in `run.seed` form one *configuration*, and each metric is reported as its mean across seeds with the half-width of a 95% confidence interval (Student's t, n − 1 degrees of freedom; a single seed has none). `REPORT_DIR` gets `runs.csv` (per run), `configurations.csv` and `classes.csv` (`<metric>_mean`, `_ci95`, `_n` per configuration, and per configuration and task class), `metrics.md` (the headline table, failure rate by cause and the per-class breakdown) and the plots `goodput_vs_arrival_rate.png`, `latency_vs_n.png`, `memory_over_time.png`, `failure_rate_vs_n.png`, `cached_tokens_by_policy.png`.
 
-**Metric window.** Agent tasks that *arrive* in `[window-start, window-end)` are measured, with their model requests; rates are per minute over the window. System samples and policy decisions count when their `t_s` is in the window. The default window starts at 0 and has no end, with rates taken up to the last completion of any agent task. In code: `agentserve.analysis.MetricWindow`.
+**Metric window.** Agent tasks that *arrive* in `[window-start, window-end)` are measured, with their model requests; rates are per minute over the window. System samples and policy decisions count when their `t_s` is in the window. By default each run is measured over its recorded `window.json` (the measured window after the warm-up). A run directory without one is measured from 0 with no end, with rates taken up to the last completion of any agent task. In code: `agentserve.analysis.MetricWindow`.
 
 | Metric | Definition |
 | --- | --- |

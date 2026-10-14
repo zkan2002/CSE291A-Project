@@ -66,3 +66,13 @@ every 100 ms, and stops the server at the end. The extra files in the run direct
 (`samples.jsonl`, `metadata.json`, server logs) are described in
 [`run-directory.md`](run-directory.md). `pytest -m real_runtime` includes a smoke test
 of this command and of the adapter.
+
+## Running a sweep on the real server
+
+```sh
+python -m uv run agentserve sweep configs/real-grid-smoke.toml --out results/real-grid-smoke
+python -m uv run agentserve report results/real-grid-smoke --out results/real-grid-smoke/report
+```
+
+`configs/phase1-dev.toml` is the Phase 1 sweep. Rerun the same command to resume an
+interrupted sweep. Format and directory layout: [`sweeps.md`](sweeps.md).

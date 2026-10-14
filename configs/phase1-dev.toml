@@ -1,0 +1,88 @@
+# Phase 1 sweep on development workloads (spec #1 with the pilot amendments; ticket #11).
+#   python -m uv run agentserve sweep configs/phase1-dev.toml --out results/phase1-dev --dry-run
+#   python -m uv run agentserve sweep configs/phase1-dev.toml --out results/phase1-dev
+#   python -m uv run agentserve report results/phase1-dev --out results/phase1-dev/report
+# Rerun the sweep command to resume after an interruption. docs/sweeps.md describes the format.
+#
+# Run protocol: 60 s warm-up, 8 min of measured arrivals, then drain; 5 seeds per
+# configuration; every run restarts the server (cold start, unloaded measurement and
+# experiment each get a fresh llama-server). Agent tasks of classes that cannot fit
+# the 8k budget on their own stay in the mix and count as failed tasks; the report
+# adds goodput over the fitting classes.
+#
+# The grids are a deliberate subset of the full factorial (which would take weeks):
+#   1. N tuning for both baselines at the middle budget and rate (resident).
+#   2. Request-level FIFO pushed past the overflow cliff.
+#   3. Memory budget x arrival rate under both fixed cache policies, at N = 4.
+#   4. Caching off, once, at the middle point.
+# Grid 3 uses N = 4 as a placeholder: once grid 1 is in, set each baseline's best
+# fixed N there (dev workloads only), or add a grid per baseline. Cells that two
+# grids share run once. If time runs short, cut cells (rates first), not seeds.
+# Estimated wall clock: see the ticket #9 hand-off (about 2.5 days as written).
+
+[sweep]
+seeds = [1, 2, 3, 4, 5]
+
+# 1. tune N (best fixed N per baseline)
+[[grid]]
+policy = ["task_level_fifo", "request_level_fifo"]
+concurrency = [1, 2, 4, 8]
+memory_budget = [16384]
+arrival_rate = [0.1]
+cache_policy = ["resident"]
+
+# 2. past the overflow cliff: request-level admission with a large N on a small budget
+[[grid]]
+policy = ["request_level_fifo"]
+concurrency = [8, 16]
+memory_budget = [8192]
+arrival_rate = [0.1]
+cache_policy = ["resident"]
+
+# 3. memory budget x arrival rate x cache policy
+[[grid]]
+policy = ["task_level_fifo", "request_level_fifo"]
+concurrency = [4]
+memory_budget = [8192, 16384, 32768]
+arrival_rate = [0.05, 0.1, 0.2]
+cache_policy = ["resident", "offload"]
+
+# 4. caching off
+[[grid]]
+policy = ["task_level_fifo", "request_level_fifo"]
+concurrency = [4]
+memory_budget = [16384]
+arrival_rate = [0.1]
+cache_policy = ["off"]
+
+[base.run]
+seed = 1
+split = "dev"             # development workloads only; evaluation uses split = "eval"
+warmup_s = 60             # arrivals in [0, 60) are the warm-up: run and logged, not measured
+duration_s = 540          # measured arrivals in [60, 540) = 8 min; then drain
+
+[base.workload]
+mix = "default"           # 8 task classes (docs/workload.md)
+arrival_rate_per_s = 0.1
+arrival_mode = "poisson"
+
+[base.policy]
+name = "task_level_fifo"
+concurrency = 4
+
+[base.runtime]
+kind = "llama_server"
+request_timeout_s = 900   # beyond any hard timeout the proxy enforces in practice
+sample_interval_s = 0.1
+
+[base.server]
+binary = "C:/CSE291A/artifacts/llama.cpp/b11606/llama-server.exe"
+model = "C:/CSE291A/artifacts/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+host = "127.0.0.1"
+port = 8094
+memory_budget = 16384     # set per cell
+slots = 4                 # set per cell: slots = N
+gpu_layers = 99
+cache_ram_mib = 8192      # the runtime default host-RAM prompt cache (off for cache_policy = "off")
+cache_idle_slots = false  # set per cell by cache_policy
+cache_prompt = true
