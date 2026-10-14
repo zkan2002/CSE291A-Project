@@ -421,6 +421,41 @@ def test_one_command_regenerates_every_table_and_plot_from_run_directories(tmp_p
     assert len(read_csv(out / "runs.csv")) == 4
 
 
+def cold_start(role, startup_s, latencies):
+    return {"role": role, "startup_s": startup_s,
+            "first_requests": [{"n_prompt_tokens": 512, "n_predict": 32, "latency_s": s}
+                               for s in latencies]}
+
+
+def test_cold_start_is_reported_apart_from_steady_state_metrics(tmp_path):
+    sweep = tmp_path / "sweep"
+    for seed, (startup, first) in [(1, (4.0, 0.9)), (2, (6.0, 0.7))]:
+        run_dir = sweep / f"seed{seed}"
+        write_seed_run(run_dir, seed, completed=3)
+        (run_dir / "cold_start.json").write_text(json.dumps({"launches": [
+            cold_start("cold_start", startup, [first, 0.2, 0.2]),
+            cold_start("unloaded", 3.0, [0.8, 0.2, 0.2]),
+            {"role": "experiment", "startup_s": 2.5, "first_requests": []}]}))
+    write_seed_run(sweep / "simulated", 3, completed=3, concurrency=8)  # no cold start
+    out = tmp_path / "report"
+
+    main(["report", str(sweep), "--out", str(out)])
+
+    # not among the steady-state metrics
+    assert not any(k.startswith("cold_start") for k in read_csv(out / "runs.csv")[0])
+    rows = read_csv(out / "cold_start.csv")
+    assert [(r["seed"], r["role"]) for r in rows] == [
+        ("1", "cold_start"), ("1", "unloaded"), ("1", "experiment"),
+        ("2", "cold_start"), ("2", "unloaded"), ("2", "experiment")]
+    assert float(rows[0]["startup_s"]) == 4.0
+    assert float(rows[0]["first_request_s"]) == 0.9
+    assert float(rows[0]["warm_request_s"]) == 0.2
+    assert rows[2]["first_request_s"] == ""
+    table = (out / "metrics.md").read_text(encoding="utf-8")
+    assert "## Cold start" in table
+    assert "5.000 ± " in table  # mean model load (launch to healthy) across seeds
+
+
 def test_the_report_takes_a_metric_window(tmp_path):
     run_dir = tmp_path / "run"
     write_run(run_dir, [task(0, 0.0, 5.0), task(1, 10.0, 20.0)], config=run_config(1))

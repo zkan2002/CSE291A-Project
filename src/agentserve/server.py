@@ -85,7 +85,12 @@ def wait_healthy(base_url: str, timeout_s: float = 120.0, proc: subprocess.Popen
 def start_server(cfg: ServerConfig, log_path: str | Path | None = None) -> subprocess.Popen:
     """Start llama-server, wait until healthy, return the process (caller stops it)."""
     stdout = open(log_path, "w", encoding="utf-8") if log_path else None
-    proc = subprocess.Popen(launch_args(cfg), stdout=stdout, stderr=subprocess.STDOUT if stdout else None)
+    try:
+        proc = subprocess.Popen(launch_args(cfg), stdout=stdout,
+                                stderr=subprocess.STDOUT if stdout else None)
+    finally:
+        if stdout is not None:
+            stdout.close()  # the child has its own handle; ours would keep the log locked
     try:
         wait_healthy(cfg.base_url, proc=proc)
     except BaseException:

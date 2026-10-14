@@ -10,7 +10,11 @@ metric is reported as its mean across seeds with a 95% confidence interval
 - ``runs.csv``: one row per run, every metric.
 - ``configurations.csv``: one row per configuration, ``<metric>_mean``, ``<metric>_ci95``, ``<metric>_n``.
 - ``classes.csv``: the same per configuration and task class.
-- ``metrics.md``: the headline metrics, overall and per task class, as ``mean ± ci95``.
+- ``metrics.md``: the headline metrics, overall and per task class, as ``mean ± ci95``,
+  and cold start.
+- ``cold_start.csv``: real runs only, one row per server launch (``cold_start.json``):
+  launch to healthy, and the first and last of its first model requests. Kept apart
+  from every steady-state metric.
 - ``goodput_vs_arrival_rate.png``, ``latency_vs_n.png``, ``memory_over_time.png``,
   ``failure_rate_vs_n.png``, ``cached_tokens_by_policy.png``.
 """
@@ -29,7 +33,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 from agentserve.analysis import (Configuration, Estimate, MetricWindow, RunAnalysis,  # noqa: E402
                                  aggregate, config_params, summarize)
-from agentserve.recorder import SAMPLES_FILE, TASKS_FILE  # noqa: E402
+from agentserve.recorder import COLD_START_FILE, SAMPLES_FILE, TASKS_FILE  # noqa: E402
 from agentserve.sweep import PARTIAL_SUFFIX  # noqa: E402
 
 PARAMS = ("policy", "concurrency", "memory_budget_tokens", "arrival_rate_per_s", "cache_policy")
@@ -92,6 +96,7 @@ def write_report(paths: list[Path], out_dir: Path,
     _runs_csv(runs, out_dir / "runs.csv")
     _configurations_csv(configs, out_dir / "configurations.csv")
     _classes_csv(configs, out_dir / "classes.csv")
+    _cold_start_csv(runs, out_dir / "cold_start.csv")
     (out_dir / "metrics.md").write_text(_markdown(configs, runs), encoding="utf-8")
     _plot_vs(configs, "arrival_rate_per_s", [("goodput_tasks_per_min", "goodput (tasks/min)")],
              "Goodput vs arrival rate", "arrival rate (agent tasks/s)",
@@ -132,6 +137,33 @@ def _classes_csv(configs: list[Configuration], path: Path) -> None:
     rows = [{**_param_cols(c), "task_class": cls, **_estimate_cols(estimates, names)}
             for c in configs for cls, estimates in c.classes.items()]
     _write_csv(path, [*PARAMS, "seeds", "task_class", *_estimate_headers(names)], rows)
+
+
+COLD_START_FIELDS = ("startup_s", "first_request_s", "warm_request_s")
+
+
+def cold_start(run_dir: Path) -> list[dict]:
+    """One row per server launch of a real run: its role (``cold_start``,
+    ``unloaded`` or ``experiment``), launch to healthy (``startup_s``), and the
+    latency of the first and the last of its first model requests (None if it
+    sent none). Empty for a simulated run."""
+    path = run_dir / COLD_START_FILE
+    if not path.exists():
+        return []
+    rows = []
+    for launch in json.loads(path.read_text())["launches"]:
+        latencies = [r["latency_s"] for r in launch["first_requests"]]
+        rows.append({"role": launch["role"], "startup_s": launch["startup_s"],
+                     "first_request_s": latencies[0] if latencies else None,
+                     "warm_request_s": latencies[-1] if len(latencies) > 1 else None})
+    return rows
+
+
+def _cold_start_csv(runs: list[RunAnalysis], path: Path) -> None:
+    rows = [{"run_dir": str(r.run_dir), "seed": r.config.get("run", {}).get("seed"),
+             **config_params(r.config), **{k: ("" if v is None else v) for k, v in row.items()}}
+            for r in sorted(runs, key=lambda r: str(r.run_dir)) for row in cold_start(r.run_dir)]
+    _write_csv(path, ["run_dir", "seed", *PARAMS, "role", *COLD_START_FIELDS], rows)
 
 
 def _param_cols(c: Configuration) -> dict:
@@ -184,6 +216,21 @@ def _markdown(configs: list[Configuration], runs: list[RunAnalysis]) -> str:
     lines += _md_table(["", "task class", *(h for _, h in CLASS_HEADLINE)],
                        [[f"C{i}", cls, *(_pm(est.get(n)) for n, _ in CLASS_HEADLINE)]
                         for i, c in enumerate(configs, 1) for cls, est in c.classes.items()])
+    cold_rows = []
+    for i, c in enumerate(configs, 1):
+        launches = [row for r in c.runs for row in cold_start(r.run_dir)]
+        for role in dict.fromkeys(row["role"] for row in launches):
+            of_role = [row for row in launches if row["role"] == role]
+            cold_rows.append([f"C{i}", role, *(
+                _pm(Estimate.of([row[f] for row in of_role if row[f] is not None]))
+                for f in COLD_START_FIELDS)])
+    if cold_rows:
+        lines += ["", "## Cold start", "",
+                  "Per server launch, across seeds: launch to healthy (model load), and the "
+                  "latency of its first and last probe model request. Not part of any metric "
+                  "above.", ""]
+        lines += _md_table(["", "launch", "startup s", "first request s", "warm request s"],
+                           cold_rows)
     return "\n".join(lines) + "\n"
 
 

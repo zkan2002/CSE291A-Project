@@ -103,6 +103,12 @@ class Recorder:
         (self._run_dir / METADATA_FILE).write_text(
             json.dumps(metadata, indent=2, sort_keys=True) + "\n")
 
+    def cold_start(self, launches: list[dict[str, Any]]) -> None:
+        """Every server launch of a real run so far: role, launch to healthy, first
+        model requests (rewritten after each launch)."""
+        (self._run_dir / COLD_START_FILE).write_text(
+            json.dumps({"launches": launches}, indent=2, sort_keys=True) + "\n")
+
     def unloaded(self, records) -> None:
         """Each agent task's unloaded completion time, task SLO and hard timeout
         (``agentserve.unloaded.UnloadedRecord``), one line per agent task."""

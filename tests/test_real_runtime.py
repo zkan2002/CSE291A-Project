@@ -114,9 +114,20 @@ def test_short_experiment_on_the_real_server_writes_a_run_directory(server_cfg, 
     assert all(u["failure"] is None and u["unloaded_completion_s"] > 0.5 for u in unloaded)
     assert (run_dir / "unloaded-server.log").stat().st_size > 0
 
-    summary = summarize(run_dir)
-    assert summary.agent_tasks == len(tasks) and summary.throughput_tasks_per_min > 0
-    assert summary.goodput_tasks_per_min > 0
+    summary = summarize(run_dir).metrics
+    assert summary["agent_tasks"] == len(tasks) and summary["throughput_tasks_per_min"] > 0
+    assert summary["goodput_tasks_per_min"] > 0
+
+    # cold start, recorded per server launch: three fresh servers, one after another
+    launches = json.loads((run_dir / "cold_start.json").read_text())["launches"]
+    assert [l["role"] for l in launches] == ["cold_start", "unloaded", "experiment"]
+    assert len({l["pid"] for l in launches}) == 3
+    assert all(l["startup_s"] > 0 for l in launches)
+    assert meta["server_startup_s"] == launches[-1]["startup_s"]
+    probes = launches[0]["first_requests"]
+    assert len(probes) == 3 and all(p["n_cached_tokens"] == 0 for p in probes)
+    assert launches[-1]["first_requests"] == []  # the experiment's server gets nothing extra
+    assert (run_dir / "cold-start-server.log").stat().st_size > 0
 
     # the server was stopped after the run
     with pytest.raises(httpx.HTTPError):
