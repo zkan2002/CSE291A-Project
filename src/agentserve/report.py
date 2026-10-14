@@ -32,7 +32,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 from agentserve.analysis import (Configuration, Estimate, MetricWindow, RunAnalysis,  # noqa: E402
-                                 aggregate, config_params, summarize)
+                                 aggregate, config_params, read_jsonl, summarize)
 from agentserve.recorder import COLD_START_FILE, SAMPLES_FILE, TASKS_FILE  # noqa: E402
 from agentserve.sweep import PARTIAL_SUFFIX  # noqa: E402
 
@@ -325,7 +325,7 @@ def _plot_memory(configs: list[Configuration], path: Path) -> None:
         ax.set_ylabel(ylabel, color=INK)
         drawn = 0
         for i, c in enumerate(configs):
-            samples = _read_jsonl(c.runs[0].run_dir / SAMPLES_FILE)
+            samples = read_jsonl(c.runs[0].run_dir / SAMPLES_FILE)
             points = [(s["t_s"], s[field] / 2 ** 20) for s in samples if s.get(field) is not None]
             if points:
                 ax.plot([t for t, _ in points], [v for _, v in points], linewidth=2,
@@ -357,9 +357,3 @@ def _plot_cached(configs: list[Configuration], path: Path) -> None:
     ax.set_ylabel("cached prompt tokens per model request", color=INK)
     ax.set_ylim(bottom=0)
     _save(fig, path)
-
-
-def _read_jsonl(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line]

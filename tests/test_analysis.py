@@ -260,11 +260,15 @@ def test_a_metric_window_measures_only_agent_tasks_arriving_inside_it(tmp_path, 
     write_jsonl(run_dir / "requests.jsonl", [
         request(0, 0, 0.0, 4.0, 5.0), request(1, 0, 10.0, 11.0, 20.0),
         request(2, 0, 20.0, 23.0, 50.0), request(4, 0, 40.0, 44.0, 45.0)])
+    # system samples and policy decisions count over the whole period the measured
+    # agent tasks run: from the window's start through the drain, up to the last
+    # completion of a measured agent task (50 s)
     write_jsonl(run_dir / "samples.jsonl", [
         sample(5.0, 9000, 900), sample(15.0, 4000, 400), sample(39.0, 5000, 500),
-        sample(40.0, 9000, 900)])
+        sample(45.0, 6000, 600), sample(50.5, 9000, 900)])
     write_jsonl(run_dir / "decisions.jsonl", [
-        decision(0.0, 1e-3), decision(10.0, 10e-6), decision(20.0, 30e-6), decision(41.0, 1e-3)])
+        decision(0.0, 1e-3), decision(10.0, 10e-6), decision(20.0, 30e-6),
+        decision(41.0, 50e-6), decision(51.0, 1e-3)])
 
     m = analyze(run_dir, capsys, MetricWindow(start_s=10.0, end_s=40.0))
 
@@ -274,9 +278,10 @@ def test_a_metric_window_measures_only_agent_tasks_arriving_inside_it(tmp_path, 
     assert m["throughput_tasks_per_min"] == pytest.approx(4.0)
     assert m["completion_latency_p50_s"] == pytest.approx(20.0)
     assert m["queueing_mean_s"] == pytest.approx(2.0)
-    assert m["peak_vram_mib"] == pytest.approx(5000)
-    assert m["peak_host_ram_mib"] == pytest.approx(500)
-    assert m["policy_overhead_mean_us"] == pytest.approx(20)
+    assert m["peak_vram_mib"] == pytest.approx(6000)
+    assert m["peak_host_ram_mib"] == pytest.approx(600)
+    assert m["policy_decisions"] == 3
+    assert m["policy_overhead_mean_us"] == pytest.approx(30)
 
 
 def test_the_default_window_measures_the_whole_run_up_to_the_last_completion(tmp_path, capsys):

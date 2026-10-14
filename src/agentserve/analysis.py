@@ -84,10 +84,10 @@ def summarize(run_dir: Path, window: MetricWindow | None = None) -> RunAnalysis:
     if window is None:
         window = MetricWindow.recorded(run_dir)
     config = _read_json(run_dir / "config.json")
-    all_tasks = _read_jsonl(run_dir / TASKS_FILE)
+    all_tasks = read_jsonl(run_dir / TASKS_FILE)
     tasks = [t for t in all_tasks if window.contains(t["arrived_s"])]
     measured = {t["task_id"] for t in tasks}
-    requests = [r for r in _read_jsonl(run_dir / REQUESTS_FILE) if r["task_id"] in measured]
+    requests = [r for r in read_jsonl(run_dir / REQUESTS_FILE) if r["task_id"] in measured]
     end_s = window.end_s if window.end_s is not None else max(
         (t["completed_s"] for t in all_tasks), default=0.0)
     span_s = end_s - window.start_s
@@ -99,10 +99,11 @@ def summarize(run_dir: Path, window: MetricWindow | None = None) -> RunAnalysis:
     m.update(_fittable_goodput(tasks, fits, slos, span_s))
     m.update(_queueing(requests))
     m.update(_failures(tasks))
-    m.update(_memory([s for s in _read_jsonl(run_dir / SAMPLES_FILE) if window.contains(s["t_s"])]))
+    running = _running_period(window, tasks)
+    m.update(_memory([s for s in read_jsonl(run_dir / SAMPLES_FILE) if running(s["t_s"])]))
     m.update(_cached_tokens(requests))
     m.update(_policy_overhead(
-        [d for d in _read_jsonl(run_dir / DECISIONS_FILE) if window.contains(d["t_s"])]))
+        [d for d in read_jsonl(run_dir / DECISIONS_FILE) if running(d["t_s"])]))
 
     classes: dict[str, Metrics] = {}
     for name in sorted({t["task_class"] for t in tasks}):
@@ -114,6 +115,18 @@ def summarize(run_dir: Path, window: MetricWindow | None = None) -> RunAnalysis:
         c["fits_budget"] = math.nan if fits is None else int(name in fits)
         classes[name] = c
     return RunAnalysis(run_dir, config, window, m, classes)
+
+
+def _running_period(window: MetricWindow, measured: list[dict]):
+    """Whether a run-clock time falls in the period the measured agent tasks run:
+    from the window's start through the drain, up to the last completion of a
+    measured agent task (the window itself if none was measured). System samples
+    and policy decisions count over it, so the drain's memory and decisions are
+    not lost."""
+    end = max((t["completed_s"] for t in measured), default=None)
+    if end is None:
+        return window.contains
+    return lambda t: window.start_s <= t <= end
 
 
 @dataclass(frozen=True)
@@ -319,7 +332,8 @@ def _read_json(path: Path) -> dict:
     return json.loads(path.read_text()) if path.exists() else {}
 
 
-def _read_jsonl(path: Path) -> list[dict]:
+def read_jsonl(path: Path) -> list[dict]:
+    """The JSON lines of a run-directory file; none if it does not exist."""
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text().splitlines() if line]
@@ -329,7 +343,7 @@ def _task_slos(run_dir: Path) -> dict[int, float | None] | None:
     path = run_dir / UNLOADED_FILE
     if not path.exists():
         return None
-    return {u["task_id"]: u["slo_s"] for u in _read_jsonl(path)}
+    return {u["task_id"]: u["slo_s"] for u in read_jsonl(path)}
 
 
 def _per_min(count: int, span_s: float) -> float:
