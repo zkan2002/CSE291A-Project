@@ -12,6 +12,7 @@ REQUESTS_FILE = "requests.jsonl"
 TASKS_FILE = "tasks.jsonl"
 PROMPTS_FILE = "prompts.jsonl"
 UNLOADED_FILE = "unloaded.jsonl"
+DECISIONS_FILE = "decisions.jsonl"
 SAMPLES_FILE = "samples.jsonl"
 METADATA_FILE = "metadata.json"
 SERVER_LOG_FILE = "server.log"
@@ -52,6 +53,7 @@ class Recorder:
         self._requests = _open(run_dir / REQUESTS_FILE)
         self._tasks = _open(run_dir / TASKS_FILE)
         self._prompts = _open(run_dir / PROMPTS_FILE) if record_prompts else None
+        self._decisions = _open(run_dir / DECISIONS_FILE)
         self._samples = None
 
     def request(self, record: RequestRecord) -> None:
@@ -65,6 +67,13 @@ class Recorder:
         if self._prompts is not None:
             _write_line(self._prompts, {"task_id": task_id, "step": step,
                                         "prompt_tokens": list(prompt_tokens)})
+
+    def decision(self, *, t_s: float, decision_s: float, n_pending: int, n_admitted: int) -> None:
+        """One admission-policy decision: when (run clock), how long it took (wall time,
+        so this file is not reproducible byte for byte), and how many model requests
+        were pending and admitted."""
+        _write_line(self._decisions, {"t_s": t_s, "decision_s": decision_s,
+                                      "n_pending": n_pending, "n_admitted": n_admitted})
 
     def system_sample(self, sample: dict[str, Any]) -> None:
         """One system sample (real runs only; the file is created on the first sample)."""
@@ -87,6 +96,7 @@ class Recorder:
     def close(self) -> None:
         self._requests.close()
         self._tasks.close()
+        self._decisions.close()
         for f in (self._prompts, self._samples):
             if f is not None:
                 f.close()

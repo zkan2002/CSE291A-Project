@@ -113,3 +113,6 @@ class _TaskSink:
 
     def task(self, record: TaskRecord) -> None:
         self.tasks.append(record)
+
+    def decision(self, **_) -> None:
+        pass

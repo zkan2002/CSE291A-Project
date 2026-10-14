@@ -54,6 +54,14 @@ _Avoid_: Deadline (unqualified), latency target
 Agent tasks completed within their task SLO, per minute. The headline measure of completed agent work.
 _Avoid_: Throughput (which counts all completed tasks regardless of SLO)
 
+**Policy overhead**:
+The wall-clock time the proxy spends in the admission policy deciding what to admit, measured per decision and kept apart from runtime time.
+_Avoid_: Scheduling latency, proxy latency
+
+**Configuration**:
+One cell of a sweep: every experiment setting except the seed. Metrics are reported per configuration as a mean with a 95% confidence interval across its seeds.
+_Avoid_: Setting, cell (unqualified)
+
 **Failed task**:
 An agent task with at least one model request that returned an error, or that exceeded its hard timeout. Failed tasks stay in every denominator.
 _Avoid_: Dropped task, skipped task

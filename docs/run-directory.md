@@ -9,6 +9,7 @@
 | `tasks.jsonl` | One line per agent task, written when it completes or fails. |
 | `unloaded.jsonl` | One line per agent task: its unloaded completion time, task SLO and hard timeout. Written before the experiment starts. |
 | `prompts.jsonl` | Only with `record_prompts = true` under `[run]`: one line per model request, written when it is issued. |
+| `decisions.jsonl` | One line per admission-policy decision, with its wall-clock duration (policy overhead). Not reproducible byte for byte. |
 
 A **real run** (`[runtime] kind = "llama_server"`) writes the same files in the same format, plus:
 
@@ -19,7 +20,7 @@ A **real run** (`[runtime] kind = "llama_server"`) writes the same files in the 
 | `server.log` | The experiment's llama-server output. |
 | `unloaded-server.log` | The llama-server output while unloaded completion times were measured (absent when they came from `--unloaded-cache`). |
 
-All times are seconds since the experiment started, on the run's clock (virtual for the simulated runtime, `perf_counter` wall time for a real run). Lines are JSON objects with sorted keys, so the same config and seed give byte-identical files on the virtual clock. A simulated run never writes the real-run files, so nothing that depends on wall time lands in its run directory. Nothing is dropped: a failed model request or failed task still gets its line.
+All times are seconds since the experiment started, on the run's clock (virtual for the simulated runtime, `perf_counter` wall time for a real run). Lines are JSON objects with sorted keys, so the same config and seed give byte-identical files on the virtual clock. A simulated run never writes the real-run files; the only wall-time measurement in its run directory is `decisions.jsonl`, which is therefore not byte-identical across repeats (every other file is). Nothing is dropped: a failed model request or failed task still gets its line.
 
 ## Real runs
 
@@ -95,6 +96,17 @@ Before the experiment, every agent task of the workload is run alone on an other
 
 `agentserve analyze` reports *goodput* (agent tasks that did not fail and completed within `slo_s` of arriving, per minute over the same window as throughput) and *SLO attainment* (the fraction of all agent tasks, failed ones included, that count towards goodput).
 
+## `decisions.jsonl`
+
+The proxy times every call into the admission policy (building its state snapshot plus `decide`) with `perf_counter`, on every run, simulated or real.
+
+| Field | Meaning |
+| --- | --- |
+| `t_s` | Run-clock time of the decision. |
+| `decision_s` | Wall-clock seconds the decision took. |
+| `n_pending` | Model requests waiting when the policy was asked. |
+| `n_admitted` | How many of them it admitted. |
+
 ## `samples.jsonl` (real runs)
 
 | Field | Meaning |
@@ -119,3 +131,29 @@ A source that fails at a tick records `null` for that tick. The server does not 
 | `started_at`, `python`, `platform` | Wall-clock start (UTC) and the host. |
 
 Compare these with [`configs/pins.toml`](../configs/pins.toml).
+
+## Analysis
+
+```
+agentserve analyze RUN_DIR [--window-start S] [--window-end S]
+agentserve report PATH... --out REPORT_DIR [--window-start S] [--window-end S]
+```
+
+`analyze` prints one run's metrics. `report` regenerates every table and plot from raw run directories: each `PATH` is a run directory or a directory holding run directories at any depth. Runs whose `config.json` differ only in `run.seed` form one *configuration*, and each metric is reported as its mean across seeds with the half-width of a 95% confidence interval (Student's t, n − 1 degrees of freedom; a single seed has none). `REPORT_DIR` gets `runs.csv` (per run), `configurations.csv` and `classes.csv` (`<metric>_mean`, `_ci95`, `_n` per configuration, and per configuration and task class), `metrics.md` (the headline table, failure rate by cause and the per-class breakdown) and the plots `goodput_vs_arrival_rate.png`, `latency_vs_n.png`, `memory_over_time.png`, `failure_rate_vs_n.png`, `cached_tokens_by_policy.png`.
+
+**Metric window.** Agent tasks that *arrive* in `[window-start, window-end)` are measured, with their model requests; rates are per minute over the window. System samples and policy decisions count when their `t_s` is in the window. The default window starts at 0 and has no end, with rates taken up to the last completion of any agent task. In code: `agentserve.analysis.MetricWindow`.
+
+| Metric | Definition |
+| --- | --- |
+| `agent_tasks`, `failed_tasks` | Measured agent tasks, and how many failed. |
+| `throughput_tasks_per_min` | Completed (not failed) agent tasks per minute. |
+| `goodput_tasks_per_min`, `slo_attainment` | See `unloaded.jsonl` above; `nan` without it. |
+| `goodput_fittable_tasks_per_min`, `slo_attainment_fittable` | The same, restricted to task classes that fit the memory budget: a class fits when its longest agent task's last model request (prompt plus `n_predict`, i.e. `initial + steps_max x output + (steps_max - 1) x tool_result` tokens) is at most the budget (`runtime.memory_budget_tokens` or `server.memory_budget`). Agent tasks of the other classes still count as failed tasks in every other metric. `nan` if the config does not give the classes and budget. |
+| `completion_latency_p50_s`, `_p95_s`, `_p99_s` | Completion minus arrival over completed agent tasks (linear interpolation). |
+| `queueing_mean_s`, `queueing_p95_s` | `admitted_s - arrived_s` per model request, failed ones included. |
+| `peak_vram_mib`, `peak_host_ram_mib` | Largest `vram_used_bytes` and `server_rss_bytes` sample; `nan` without `samples.jsonl`. |
+| `failure_rate`, `failure_rate.<cause>` | Failed tasks over all measured agent tasks, overall and per cause (the four typed errors always, others when seen). |
+| `cached_tokens_per_request`, `cached_token_fraction` | Over successful model requests: mean `n_cached_tokens`, and cached over prompt tokens. |
+| `policy_decisions`, `policy_overhead_mean_us`, `_p99_us`, `policy_overhead_total_ms` | From `decisions.jsonl`; `nan` without it. |
+
+The per-class breakdown repeats the agent-task metrics, queueing time and failure rates for each task class, plus `fits_budget` (1 or 0).
