@@ -103,9 +103,18 @@ class _VirtualTimeLoop(asyncio.SelectorEventLoop):
         self._virtual_now = 0.0
         super().__init__(selector)
         selector.loop = self
+        # asyncio fires every timer due within the clock's resolution early; the
+        # OS's is 15.6 ms on Windows, so virtual time uses 1 ns instead (it must
+        # stay > 0: a timer fires only when strictly before now + resolution).
+        self._clock_resolution = 1e-9
 
     def time(self) -> float:
         return self._virtual_now
 
     def advance(self, seconds: float) -> None:
-        self._virtual_now += seconds
+        # land exactly on the next timer: ``now + (when - now)`` can fall short of
+        # ``when`` in floating point, which with no clock resolution never fires it
+        target = self._virtual_now + seconds
+        if self._scheduled:
+            target = max(target, self._scheduled[0].when())
+        self._virtual_now = target
