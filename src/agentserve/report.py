@@ -30,6 +30,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 from agentserve.analysis import (Configuration, Estimate, MetricWindow, RunAnalysis,  # noqa: E402
                                  aggregate, config_params, summarize)
 from agentserve.recorder import SAMPLES_FILE, TASKS_FILE  # noqa: E402
+from agentserve.sweep import PARTIAL_SUFFIX  # noqa: E402
 
 PARAMS = ("policy", "concurrency", "memory_budget_tokens", "arrival_rate_per_s", "cache_policy")
 
@@ -67,12 +68,16 @@ INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"
 
 
 def find_run_dirs(paths: list[Path]) -> list[Path]:
+    """Run directories given, or under the given directories at any depth. An
+    unfinished sweep cell (a ``.partial`` directory, see ``agentserve.sweep``) is not one."""
     runs = set()
     for path in paths:
         if (path / TASKS_FILE).exists():
             runs.add(path)
         else:
-            runs.update(p.parent for p in path.rglob(TASKS_FILE))
+            runs.update(p.parent for p in path.rglob(TASKS_FILE)
+                        if not any(part.endswith(PARTIAL_SUFFIX)
+                                   for part in p.parent.relative_to(path).parts))
     return sorted(runs)
 
 

@@ -5,6 +5,8 @@
     agentserve analyze RUN_DIR            print one run's metrics
     agentserve report PATH... --out DIR   every table and plot, from run directories
                                           (or directories holding them), across seeds
+    agentserve sweep SWEEP --out DIR      run every cell of a sweep grid, one run directory
+        [--dry-run]                       each; rerun to resume (complete cells are skipped)
     analyze and report take [--window-start S] [--window-end S]: measure only the
     agent tasks arriving in [S, S) (default: each run's recorded measured window).
 """
@@ -35,6 +37,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="run directories, or directories holding them at any depth")
     report.add_argument("--out", type=Path, required=True, help="report directory (overwritten)")
     _window_args(report)
+    sweep = commands.add_parser("sweep", help="run (or resume) a sweep over a grid of configurations")
+    sweep.add_argument("sweep", type=Path, help="sweep config (TOML)")
+    sweep.add_argument("--out", type=Path, required=True, help="sweep directory (created or resumed)")
+    sweep.add_argument("--dry-run", action="store_true",
+                       help="list the cells and whether each is complete, then exit")
     args = parser.parse_args(argv)
 
     if args.command == "run":
@@ -48,6 +55,19 @@ def main(argv: list[str] | None = None) -> int:
         configs = write_report(args.paths, args.out, _window(args))
         print(f"wrote {args.out} ({len(configs)} configurations, "
               f"{sum(len(c.runs) for c in configs)} runs)")
+    elif args.command == "sweep":
+        from agentserve.sweep import cell_status, load_sweep, run_sweep
+        sweep_cfg = load_sweep(args.sweep)
+        if args.dry_run:
+            cells = cell_status(sweep_cfg, args.out)
+            for cell, done in cells:
+                print(f"{'complete' if done else 'pending '}  {cell.name}")
+            print(f"{sum(d for _, d in cells)} of {len(cells)} cells complete")
+            return 0
+        result = run_sweep(sweep_cfg, args.out)
+        print(f"{len(result.complete)} cells run, {len(result.skipped)} already complete, "
+              f"{len(result.failed)} failed (see {args.out / 'sweep.jsonl'})")
+        return 1 if result.failed else 0
     return 0
 
 
