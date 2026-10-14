@@ -59,8 +59,12 @@ The wall-clock time the proxy spends in the admission policy deciding what to ad
 _Avoid_: Scheduling latency, proxy latency
 
 **Configuration**:
-One cell of a sweep: every experiment setting except the seed. Metrics are reported per configuration as a mean with a 95% confidence interval across its seeds.
-_Avoid_: Setting, cell (unqualified)
+Every experiment setting except the seed: one combination of the parameters a sweep varies. Metrics are reported per configuration as a mean with a 95% confidence interval across its seeds.
+_Avoid_: Setting, cell
+
+**Sweep run**:
+One configuration run with one seed: the unit a sweep runs, records and, once complete, skips when resumed.
+_Avoid_: Cell, job, trial
 
 **Failed task**:
 An agent task with at least one model request that returned an error, or that exceeded its hard timeout. Failed tasks stay in every denominator.
@@ -75,3 +79,11 @@ _Avoid_: Memory limit, RAM budget, VRAM budget
 **Retained context**:
 The KV state of an agent task's earlier steps kept across a tool delay so the next agent step can reuse it instead of recomputing it.
 _Avoid_: Cached prompt, session state
+
+**Slot**:
+One of the runtime's fixed number of places where a model request runs. A slot keeps the context of the last model request it ran until that context is reused, overwritten or discarded, so pinning an agent task to its slot is how its retained context is reused.
+_Avoid_: Worker, lane, sequence
+
+**Cache policy**:
+How retained context is kept across tool delays. *Resident*: it stays in the KV-cache pool, and each agent task is pinned to its slot. *Offload*: idle context moves out of the pool to host RAM and is brought back from there, so agent tasks are not pinned. *Off*: no context is reused, and every prompt is processed in full.
+_Avoid_: Caching mode, cache setting

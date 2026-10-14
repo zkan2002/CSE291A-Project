@@ -16,8 +16,8 @@
 #   3. Memory budget x arrival rate under both fixed cache policies, at N = 4.
 #   4. Caching off, once, at the middle point.
 # Grid 3 uses N = 4 as a placeholder: once grid 1 is in, set each baseline's best
-# fixed N there (dev workloads only), or add a grid per baseline. Cells that two
-# grids share run once. If time runs short, cut cells (rates first), not seeds.
+# fixed N there (dev workloads only), or add a grid per baseline. Sweep runs that
+# two grids share run once. If time runs short, cut sweep runs (rates first), not seeds.
 # Estimated wall clock: see the ticket #9 hand-off (about 2.5 days as written).
 
 [sweep]
@@ -80,9 +80,9 @@ binary = "C:/CSE291A/artifacts/llama.cpp/b11606/llama-server.exe"
 model = "C:/CSE291A/artifacts/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
 host = "127.0.0.1"
 port = 8094
-memory_budget = 16384     # set per cell
-slots = 4                 # set per cell: slots = N
+memory_budget = 16384     # set per sweep run
+slots = 4                 # set per sweep run: slots = N
 gpu_layers = 99
 cache_ram_mib = 8192      # the runtime default host-RAM prompt cache (off for cache_policy = "off")
-cache_idle_slots = false  # set per cell by cache_policy
+cache_idle_slots = false  # set per sweep run by cache_policy
 cache_prompt = true

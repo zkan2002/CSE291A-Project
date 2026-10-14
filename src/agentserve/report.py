@@ -75,7 +75,7 @@ INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"
 
 def find_run_dirs(paths: list[Path]) -> list[Path]:
     """Run directories given, or under the given directories at any depth. An
-    unfinished sweep cell (a ``.partial`` directory, see ``agentserve.sweep``) is not one."""
+    unfinished sweep run (a ``.partial`` directory, see ``agentserve.sweep``) is not one."""
     runs = set()
     for path in paths:
         if (path / TASKS_FILE).exists():

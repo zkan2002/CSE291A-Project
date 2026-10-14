@@ -1,7 +1,7 @@
 """The sweep runner, end to end on the simulated runtime and virtual clock: a sweep
-config expands into cells (admission policy x N x memory budget x arrival rate x
-cache policy x seed), each cell is one run directory, and an interrupted sweep
-resumes by running only the cells it hadn't finished."""
+config expands into sweep runs (admission policy x N x memory budget x arrival rate x
+cache policy x seed), each sweep run is one run directory, and an interrupted sweep
+resumes by running only the sweep runs it hadn't finished."""
 
 import json
 from pathlib import Path
@@ -67,7 +67,7 @@ def read_jsonl(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line]
 
 
-def test_a_sweep_runs_every_cell_of_its_grid_into_its_own_run_directory(tmp_path):
+def test_a_sweep_runs_every_sweep_run_of_its_grid_into_its_own_run_directory(tmp_path):
     out = tmp_path / "sweep"
 
     assert main(["sweep", str(write_sweep(tmp_path)), "--out", str(out)]) == 0
@@ -75,9 +75,9 @@ def test_a_sweep_runs_every_cell_of_its_grid_into_its_own_run_directory(tmp_path
     runs = find_run_dirs([out])
     assert len(runs) == 2 * 2 * 2  # policy x N x seed
     configs = [json.loads((r / "config.json").read_text()) for r in runs]
-    cells = sorted((c["policy"]["name"], c["policy"]["concurrency"], c["run"]["seed"])
+    sweep_runs = sorted((c["policy"]["name"], c["policy"]["concurrency"], c["run"]["seed"])
                    for c in configs)
-    assert cells == sorted((p, n, s) for p in ("task_level_fifo", "request_level_fifo")
+    assert sweep_runs == sorted((p, n, s) for p in ("task_level_fifo", "request_level_fifo")
                            for n in (2, 4) for s in (1, 2))
     for c in configs:
         assert c["runtime"]["memory_budget_tokens"] == 16384
@@ -106,7 +106,7 @@ def test_cache_policies_map_to_the_runtimes_cache_flags(tmp_path):
     assert by_cache["offload"].config["runtime"]["cache_idle_slots"] is True
 
 
-def test_several_grids_form_one_sweep_without_duplicate_cells(tmp_path):
+def test_several_grids_form_one_sweep_without_duplicate_sweep_runs(tmp_path):
     out = tmp_path / "sweep"
     second = GRID.replace('concurrency = [2, 4]', 'concurrency = [4, 8]')
 
@@ -116,12 +116,12 @@ def test_several_grids_form_one_sweep_without_duplicate_cells(tmp_path):
     assert len(find_run_dirs([out])) == 2 * 3 * 2
 
 
-def test_an_interrupted_sweep_resumes_with_only_the_cells_it_had_not_finished(tmp_path):
+def test_an_interrupted_sweep_resumes_with_only_the_sweep_runs_it_had_not_finished(tmp_path):
     sweep = load_sweep(write_sweep(tmp_path))
     out = tmp_path / "sweep"
     started = []
 
-    def interrupted_on_the_third_cell(config, run_dir, **kwargs):
+    def interrupted_on_the_third_sweep_run(config, run_dir, **kwargs):
         started.append(run_dir)
         if len(started) == 3:  # killed part-way through its run
             run_dir.mkdir(parents=True)
@@ -130,9 +130,9 @@ def test_an_interrupted_sweep_resumes_with_only_the_cells_it_had_not_finished(tm
         run_experiment(config, run_dir, **kwargs)
 
     with pytest.raises(KeyboardInterrupt):
-        run_sweep(sweep, out, run=interrupted_on_the_third_cell)
+        run_sweep(sweep, out, run=interrupted_on_the_third_sweep_run)
     finished = {r: (r / "tasks.jsonl").stat().st_mtime_ns for r in find_run_dirs([out])}
-    assert len(finished) == 2  # the interrupted cell's partial run is not a result
+    assert len(finished) == 2  # the interrupted sweep run's partial run is not a result
 
     resumed = []
 
@@ -145,7 +145,7 @@ def test_an_interrupted_sweep_resumes_with_only_the_cells_it_had_not_finished(tm
     assert len(resumed) == 8 - 2
     runs = find_run_dirs([out])
     assert len(runs) == 8
-    # the finished cells were left alone
+    # the finished sweep runs were left alone
     assert all((r / "tasks.jsonl").stat().st_mtime_ns == t for r, t in finished.items())
     # the sweep log records every attempt, the interrupted one included
     log = read_jsonl(out / "sweep.jsonl")
@@ -154,19 +154,19 @@ def test_an_interrupted_sweep_resumes_with_only_the_cells_it_had_not_finished(tm
     assert [e["status"] for e in log].count("skipped") == 2
 
 
-def test_a_failed_cell_is_recorded_and_the_sweep_goes_on(tmp_path, capsys):
+def test_a_failed_sweep_run_is_recorded_and_the_sweep_goes_on(tmp_path, capsys):
     sweep = load_sweep(write_sweep(tmp_path))
     out = tmp_path / "sweep"
     calls = []
 
-    def first_cell_crashes(config, run_dir, **kwargs):
+    def first_sweep_run_crashes(config, run_dir, **kwargs):
         calls.append(run_dir)
         if len(calls) == 1:
             run_dir.mkdir(parents=True)
             raise RuntimeError("llama-server exited during startup with code 1")
         run_experiment(config, run_dir, **kwargs)
 
-    result = run_sweep(sweep, out, run=first_cell_crashes)
+    result = run_sweep(sweep, out, run=first_sweep_run_crashes)
 
     assert len(result.failed) == 1 and len(result.complete) == 7
     [failed] = [e for e in read_jsonl(out / "sweep.jsonl") if e["status"] == "failed"]
@@ -179,7 +179,7 @@ def test_a_failed_cell_is_recorded_and_the_sweep_goes_on(tmp_path, capsys):
     assert len(retried) == 1 and len(find_run_dirs([out])) == 8
 
 
-def test_resuming_with_a_changed_cell_config_is_refused(tmp_path):
+def test_resuming_with_a_changed_sweep_run_config_is_refused(tmp_path):
     out = tmp_path / "sweep"
     main(["sweep", str(write_sweep(tmp_path)), "--out", str(out)])
     changed = load_sweep(write_sweep(tmp_path))

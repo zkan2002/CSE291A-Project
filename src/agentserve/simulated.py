@@ -60,13 +60,15 @@ _FIRST_OUTPUT_TOKEN = 1_000
 class _Slot:
     index: int
     kv: list[int] = field(default_factory=list)
-    job: _Job | None = None
+    req: _RunningRequest | None = None
     t_last_used: float = -1.0
 
 
 @dataclass
-class _Job:
-    request: ModelRequest
+class _RunningRequest:
+    """A model request submitted to the runtime: queued, then running on a slot."""
+
+    model_request: ModelRequest
     future: asyncio.Future[Completion]
     slot: _Slot | None = None
     n_cached: int = 0
@@ -79,7 +81,7 @@ class _Job:
 
     @property
     def prompt(self) -> tuple[int, ...]:
-        return self.request.prompt_tokens
+        return self.model_request.prompt_tokens
 
     @property
     def in_prompt(self) -> bool:
@@ -103,11 +105,11 @@ class SimulatedRuntime:
         self._cache_prompt = cache_prompt
         self._ram: deque[tuple[int, ...]] = deque()
         self._slots = [_Slot(i) for i in range(n_slots)]
-        self._queue: deque[_Job] = deque()
+        self._queue: deque[_RunningRequest] = deque()
         self._engine: asyncio.Task[None] | None = None
         self._wake = asyncio.Event()
-        self._span: tuple[float, int, list[_Job]] | None = None
-        """(start, iterations, jobs) of a decode span in progress: its KV cells are
+        self._span: tuple[float, int, list[_RunningRequest]] | None = None
+        """(start, iterations, model requests) of a decode span in progress: its KV cells are
         written when it ends, so occupancy adds the iterations started so far."""
 
     # --- observable KV state ------------------------------------------------
@@ -122,11 +124,11 @@ class SimulatedRuntime:
         """Tokens each slot currently holds in the KV pool, by slot index."""
         held = [len(s.kv) for s in self._slots]
         if self._span is not None:
-            start, k, jobs = self._span
+            start, k, reqs = self._span
             started = min(k, math.floor((self._clock.now() - start) / self._output_token_s
                                         + 1e-9) + 1)
-            for job in jobs:
-                held[job.slot.index] += started
+            for req in reqs:
+                held[req.slot.index] += started
         return tuple(held)
 
     @property
@@ -137,25 +139,25 @@ class SimulatedRuntime:
     # --- runtime interface --------------------------------------------------
 
     async def submit(self, request: ModelRequest) -> Completion:
-        job = _Job(request, asyncio.get_running_loop().create_future())
-        self._queue.append(job)
+        req = _RunningRequest(request, asyncio.get_running_loop().create_future())
+        self._queue.append(req)
         self._wake.set()
         if self._engine is None or self._engine.done():
             self._engine = asyncio.create_task(self._run())
         try:
-            return await job.future
+            return await req.future
         except asyncio.CancelledError:
-            self._cancel(job)
+            self._cancel(req)
             raise
 
-    def _cancel(self, job: _Job) -> None:
-        """The client gave up on ``job`` (it disconnected): a queued job leaves the
+    def _cancel(self, req: _RunningRequest) -> None:
+        """The client gave up on ``req`` (it disconnected): a queued one leaves the
         queue; a running one gives up its slot, KV kept, at the end of the
         iteration in progress, as the server releases a slot."""
-        if job in self._queue:
-            self._queue.remove(job)
-        elif job.slot is not None and job.slot.job is job:
-            job.cancelled = True
+        if req in self._queue:
+            self._queue.remove(req)
+        elif req.slot is not None and req.slot.req is req:
+            req.cancelled = True
             self._wake.set()  # cut a decode span short
 
     # --- the server loop ----------------------------------------------------
@@ -163,40 +165,40 @@ class SimulatedRuntime:
     async def _run(self) -> None:
         while True:
             for slot in self._slots:
-                if slot.job is not None and slot.job.cancelled:
-                    slot.job = None
+                if slot.req is not None and slot.req.cancelled:
+                    slot.req = None
                     slot.t_last_used = self._clock.now()
             self._start_queued()
-            running = [s.job for s in self._slots if s.job is not None]
+            running = [s.req for s in self._slots if s.req is not None]
             if not running:
                 return
             await self._iterate(running)
 
     def _start_queued(self) -> None:
-        for job in list(self._queue):
-            slot, by_id = self._pick_slot(job.request)
+        for req in list(self._queue):
+            slot, by_id = self._pick_slot(req.model_request)
             if slot is None:
                 continue
-            self._queue.remove(job)
-            if len(job.prompt) >= self._pool_tokens:  # checked only once it reaches a slot
-                job.future.set_exception(ExceedsContext(
-                    f"request ({len(job.prompt)} tokens) exceeds the available context size "
+            self._queue.remove(req)
+            if len(req.prompt) >= self._pool_tokens:  # checked only once it reaches a slot
+                req.future.set_exception(ExceedsContext(
+                    f"request ({len(req.prompt)} tokens) exceeds the available context size "
                     f"({self._pool_tokens} tokens)"))
                 continue
             if self._cache_ram_tokens and not by_id:
-                self._swap_with_ram(slot, job.prompt)
+                self._swap_with_ram(slot, req.prompt)
             if self._cache_idle_slots:
                 for other in self._slots:
-                    if other is not slot and other.job is None and other.kv:
+                    if other is not slot and other.req is None and other.kv:
                         self._save(other)
-            self._start(job, slot)
+            self._start(req, slot)
 
     def _pick_slot(self, request: ModelRequest) -> tuple[_Slot | None, bool]:
         """The slot for ``request`` (None if it must wait), and whether it was picked by id."""
         if request.slot is not None:
             slot = self._slots[request.slot]
-            return (slot if slot.job is None else None), True
-        idle = [s for s in self._slots if s.job is None]
+            return (slot if slot.req is None else None), True
+        idle = [s for s in self._slots if s.req is None]
         if not idle:
             return None, False
         best, best_sim = None, self._similarity
@@ -244,22 +246,22 @@ class SimulatedRuntime:
         while self.ram_cache_tokens > self._cache_ram_tokens:
             self._ram.popleft()
 
-    def _start(self, job: _Job, slot: _Slot) -> None:
-        n_cached = (min(_common_prefix(slot.kv, job.prompt), len(job.prompt) - 1)
+    def _start(self, req: _RunningRequest, slot: _Slot) -> None:
+        n_cached = (min(_common_prefix(slot.kv, req.prompt), len(req.prompt) - 1)
                     if self._cache_prompt else 0)
         del slot.kv[n_cached:]
-        slot.job, job.slot = job, slot
-        job.n_cached = job.n_done = n_cached
-        job.n_target = min(job.request.n_predict, self._pool_tokens - len(job.prompt))
+        slot.req, req.slot = req, slot
+        req.n_cached = req.n_done = n_cached
+        req.n_target = min(req.model_request.n_predict, self._pool_tokens - len(req.prompt))
 
-    async def _iterate(self, running: list[_Job]) -> None:
+    async def _iterate(self, running: list[_RunningRequest]) -> None:
         decoding = [j for j in running if not j.in_prompt]
         budget = self._n_batch - len(decoding)
-        chunks: list[tuple[_Job, int]] = []
-        for job in sorted((j for j in running if j.in_prompt), key=lambda j: j.slot.index):
-            n = min(len(job.prompt) - job.n_done, budget)
+        chunks: list[tuple[_RunningRequest, int]] = []
+        for req in sorted((j for j in running if j.in_prompt), key=lambda j: j.slot.index):
+            n = min(len(req.prompt) - req.n_done, budget)
             if n > 0:
-                chunks.append((job, n))
+                chunks.append((req, n))
                 budget -= n
 
         if not chunks and len(decoding) and await self._decode_span(decoding):
@@ -267,25 +269,25 @@ class SimulatedRuntime:
         if not self._make_room(len(decoding) + sum(n for _, n in chunks)):
             self._fail_all(running)
             return
-        for job in decoding:
-            job.slot.kv.append(job.outputs[-1])
-            job.outputs.append(self._next_output(job))
+        for req in decoding:
+            req.slot.kv.append(req.outputs[-1])
+            req.outputs.append(self._next_output(req))
         samples = bool(decoding)
-        for job, n in chunks:
-            job.slot.kv.extend(job.prompt[job.n_done:job.n_done + n])
-            job.n_done += n
-            if not job.in_prompt:
-                job.outputs.append(self._next_output(job))
+        for req, n in chunks:
+            req.slot.kv.extend(req.prompt[req.n_done:req.n_done + n])
+            req.n_done += n
+            if not req.in_prompt:
+                req.outputs.append(self._next_output(req))
                 samples = True
 
         n_prompt = sum(n for _, n in chunks)
         await self._clock.sleep(n_prompt * self._prompt_token_s
                                 + (self._output_token_s if samples else 0.0))
-        for job in running:
-            if len(job.outputs) >= job.n_target:
-                self._finish(job)
+        for req in running:
+            if len(req.outputs) >= req.n_target:
+                self._finish(req)
 
-    async def _decode_span(self, decoding: list[_Job]) -> bool:
+    async def _decode_span(self, decoding: list[_RunningRequest]) -> bool:
         """Run consecutive decode-only iterations as one clock sleep, until the
         first model request finishes or the pool needs room. A ``submit`` cuts the
         span short at the end of the iteration in progress, so the new request
@@ -308,56 +310,56 @@ class SimulatedRuntime:
             await self._clock.sleep(start + n * step - self._clock.now())
         waker.cancel()
         self._span = None
-        for job in decoding:
+        for req in decoding:
             for _ in range(n):
-                job.slot.kv.append(job.outputs[-1])
-                job.outputs.append(self._next_output(job))
-        for job in decoding:
-            if len(job.outputs) >= job.n_target:
-                self._finish(job)
+                req.slot.kv.append(req.outputs[-1])
+                req.outputs.append(self._next_output(req))
+        for req in decoding:
+            if len(req.outputs) >= req.n_target:
+                self._finish(req)
         return True
 
     def _make_room(self, n_cells: int) -> bool:
         """Free ``n_cells`` KV cells by deleting idle slots' KV, one slot per retry,
         first in index order. The deleted KV is discarded, never saved."""
         while self._pool_tokens - self.kv_tokens < n_cells:
-            victim = next((s for s in self._slots if s.job is None and s.kv), None)
+            victim = next((s for s in self._slots if s.req is None and s.kv), None)
             if victim is None:
                 return False
             victim.kv.clear()
         return True
 
-    def _fail_all(self, running: list[_Job]) -> None:
-        for job in running:
-            slot = job.slot
+    def _fail_all(self, running: list[_RunningRequest]) -> None:
+        for req in running:
+            slot = req.slot
             slot.kv.clear()
-            slot.job = None
+            slot.req = None
             slot.t_last_used = self._clock.now()
-            if not job.future.done():
-                job.future.set_exception(PoolExhausted("Context size has been exceeded."))
+            if not req.future.done():
+                req.future.set_exception(PoolExhausted("Context size has been exceeded."))
 
-    def _next_output(self, job: _Job) -> int:
-        return _FIRST_OUTPUT_TOKEN + len(job.outputs)
+    def _next_output(self, req: _RunningRequest) -> int:
+        return _FIRST_OUTPUT_TOKEN + len(req.outputs)
 
-    def _finish(self, job: _Job) -> None:
-        slot = job.slot
-        slot.job = None
+    def _finish(self, req: _RunningRequest) -> None:
+        slot = req.slot
+        slot.req = None
         slot.t_last_used = self._clock.now()
-        if job.future.done():  # cancelled
+        if req.future.done():  # cancelled
             return
-        if len(job.outputs) < job.request.n_predict:
+        if len(req.outputs) < req.model_request.n_predict:
             # llama-server answers HTTP 200 with ``truncated: true``; the adapter
             # reports that as exceeds_context, and so do we
-            job.future.set_exception(ExceedsContext(
-                f"output truncated at {len(job.outputs)} of {job.request.n_predict} tokens: "
+            req.future.set_exception(ExceedsContext(
+                f"output truncated at {len(req.outputs)} of {req.model_request.n_predict} tokens: "
                 f"prompt + n_predict exceeds the context size ({self._pool_tokens} tokens)"))
             return
-        n_uncached = len(job.prompt) - job.n_cached
-        job.future.set_result(Completion(
-            output_tokens=tuple(job.outputs), n_prompt_tokens=len(job.prompt),
-            n_cached_tokens=job.n_cached, slot=slot.index,
+        n_uncached = len(req.prompt) - req.n_cached
+        req.future.set_result(Completion(
+            output_tokens=tuple(req.outputs), n_prompt_tokens=len(req.prompt),
+            n_cached_tokens=req.n_cached, slot=slot.index,
             prompt_s=n_uncached * self._prompt_token_s,
-            decode_s=len(job.outputs) * self._output_token_s))
+            decode_s=len(req.outputs) * self._output_token_s))
 
 
 def _common_prefix(a, b) -> int:
