@@ -103,6 +103,30 @@ def test_a_request_pinned_to_a_busy_slot_waits_for_it_even_when_other_slots_are_
     assert second_done > first_done + 99 * OUTPUT_TOKEN_S
 
 
+def test_a_cancelled_request_gives_up_its_slot_or_its_place_in_the_queue():
+    # The proxy cancels the model request of an agent task past its hard timeout
+    # (the HTTP client disconnects; the server releases the slot).
+    async def scenario(clock, runtime):
+        long = asyncio.ensure_future(runtime.submit(ModelRequest(tokens(100, 10_000), 1000)))
+        queued = asyncio.ensure_future(at(clock, 0.1, runtime.submit(
+            ModelRequest(tokens(100, 20_000), 1000))))
+        waiting = asyncio.ensure_future(at(clock, 0.2, runtime.submit(
+            ModelRequest(tokens(100, 30_000), 100))))
+        await clock.sleep(1.0)
+        long.cancel()
+        queued.cancel()
+        result, done = await waiting
+        return result, done, runtime.kv_tokens
+
+    result, done, kv_tokens = run(scenario, n_slots=1)
+
+    # the waiting request starts within one iteration of the cancellation
+    # (100 prompt tokens + 100 outputs), not after 1000 + 1000 more outputs
+    assert len(result.output_tokens) == 100
+    assert 1.0 + 100 * OUTPUT_TOKEN_S < done < 1.0 + 102 * OUTPUT_TOKEN_S + 0.2
+    assert kv_tokens == 100 + 100 - 1  # only the finished request's KV is held
+
+
 # --- slot selection -----------------------------------------------------------
 
 

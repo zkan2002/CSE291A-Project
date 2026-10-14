@@ -18,6 +18,9 @@ spec #1's contract describes it, amended by the pilot
   slots holding tokens are purged one per retry, first in index order, KV
   discarded. If none is left, every running model request fails at once with
   ``PoolExhausted`` and its KV is cleared; queued ones are unaffected.
+- A cancelled ``submit`` (the client disconnecting, as the proxy does at a hard
+  timeout) leaves the queue, or gives up its slot at the end of the iteration
+  in progress, its KV kept.
 - An iteration takes ``prompt_token_s`` per prompt token in the batch, plus
   ``output_token_s`` if it samples any output token.
 
@@ -70,6 +73,7 @@ class _Job:
     outputs: list[int] = field(default_factory=list)
     n_target: int = 0
     """Outputs it will generate: ``n_predict``, or fewer if the pool's context runs out."""
+    cancelled: bool = False
 
     @property
     def prompt(self) -> tuple[int, ...]:
@@ -134,12 +138,30 @@ class SimulatedRuntime:
         self._wake.set()
         if self._engine is None or self._engine.done():
             self._engine = asyncio.create_task(self._run())
-        return await job.future
+        try:
+            return await job.future
+        except asyncio.CancelledError:
+            self._cancel(job)
+            raise
+
+    def _cancel(self, job: _Job) -> None:
+        """The client gave up on ``job`` (it disconnected): a queued job leaves the
+        queue; a running one gives up its slot, KV kept, at the end of the
+        iteration in progress, as the server releases a slot."""
+        if job in self._queue:
+            self._queue.remove(job)
+        elif job.slot is not None and job.slot.job is job:
+            job.cancelled = True
+            self._wake.set()  # cut a decode span short
 
     # --- the server loop ----------------------------------------------------
 
     async def _run(self) -> None:
         while True:
+            for slot in self._slots:
+                if slot.job is not None and slot.job.cancelled:
+                    slot.job = None
+                    slot.t_last_used = self._clock.now()
             self._start_queued()
             running = [s.job for s in self._slots if s.job is not None]
             if not running:
@@ -306,7 +328,8 @@ class SimulatedRuntime:
             slot.kv.clear()
             slot.job = None
             slot.t_last_used = self._clock.now()
-            job.future.set_exception(PoolExhausted("Context size has been exceeded."))
+            if not job.future.done():
+                job.future.set_exception(PoolExhausted("Context size has been exceeded."))
 
     def _next_output(self, job: _Job) -> int:
         return _FIRST_OUTPUT_TOKEN + len(job.outputs)
@@ -315,6 +338,8 @@ class SimulatedRuntime:
         slot = job.slot
         slot.job = None
         slot.t_last_used = self._clock.now()
+        if job.future.done():  # cancelled
+            return
         if len(job.outputs) < job.request.n_predict:
             # llama-server answers HTTP 200 with ``truncated: true``; the adapter
             # reports that as exceeds_context, and so do we
