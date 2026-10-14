@@ -32,16 +32,17 @@ from typing import Any
 
 import httpx
 
+from agentserve import config as cfg
 from agentserve import llama_api, unloaded
 from agentserve.clock import RealClock
-from agentserve.experiment import _unloaded, admission_policy, resident_cache_policy
+from agentserve.experiment import _unloaded, admission_policy, workload_tasks
 from agentserve.llama_runtime import LlamaServerRuntime
 from agentserve.proxy import Proxy
 from agentserve.recorder import SERVER_LOG_FILE, Recorder
 from agentserve.run_metadata import collect_run_metadata
 from agentserve.sampler import SystemSampler, real_sources
 from agentserve.server import ServerConfig, start_server, stop_server
-from agentserve.workload import AgentTaskSpec, WorkloadConfig, generate
+from agentserve.workload import AgentTaskSpec
 
 
 UNLOADED_SERVER_LOG_FILE = "unloaded-server.log"
@@ -55,11 +56,9 @@ PROBE_N_PREDICT = 32
 
 def run_real_experiment(config: dict[str, Any], run_dir: Path, *,
                         unloaded_cache_dir: Path | None = None) -> None:
-    run = config["run"]
     server = ServerConfig(**config["server"])
-    tasks = generate(WorkloadConfig.from_config(config["workload"]), duration_s=run["duration_s"],
-                     seed=run["seed"], split=run.get("split", "dev"))
-    recorder = Recorder(run_dir, config, record_prompts=run.get("record_prompts", False))
+    tasks = workload_tasks(config)
+    recorder = Recorder(run_dir, config, record_prompts=cfg.record_prompts(config))
     try:
         metadata = collect_run_metadata(server)
         recorder.metadata(metadata)
@@ -86,15 +85,14 @@ def run_real_experiment(config: dict[str, Any], run_dir: Path, *,
 async def _run(config: dict[str, Any], server: ServerConfig, server_pid: int,
                tasks: list[AgentTaskSpec], recorder: Recorder, clock: RealClock,
                hard_timeouts: dict[int, float | None]) -> None:
-    runtime_cfg = config["runtime"]
-    timeout = httpx.Timeout(runtime_cfg.get("request_timeout_s", 600.0), connect=10.0)
+    timeout = httpx.Timeout(cfg.request_timeout_s(config), connect=10.0)
     # no connection cap: the runtime's own queue, not the HTTP client, holds waiting requests
     limits = httpx.Limits(max_connections=None, max_keepalive_connections=None)
     async with httpx.AsyncClient(timeout=timeout, limits=limits) as client, \
             httpx.AsyncClient() as sampler_client:
         sampler = SystemSampler(
             clock, real_sources(base_url=server.base_url, server_pid=server_pid, client=sampler_client),
-            recorder.system_sample, interval_s=runtime_cfg.get("sample_interval_s", 0.1))
+            recorder.system_sample, interval_s=cfg.sample_interval_s(config))
         sampling = asyncio.create_task(sampler.run())
         try:
             proxy = Proxy(policy=admission_policy(config),
@@ -157,11 +155,10 @@ def _measure_unloaded(config: dict[str, Any], server: ServerConfig, tasks: list[
                       run_dir: Path, launches: _Launches) -> list[unloaded.UnloadedRecord]:
     proc = launches.start("unloaded", run_dir / UNLOADED_SERVER_LOG_FILE, probes=COLD_START_PROBES)
     try:
-        timeout = config["runtime"].get("request_timeout_s", 600.0)
         return unloaded.measure(tasks, clock=RealClock(),
-                                runtime=_ClientPerRequest(server, timeout),
+                                runtime=_ClientPerRequest(server, cfg.request_timeout_s(config)),
                                 memory_budget_tokens=server.memory_budget, n_slots=server.slots,
-                                pin_slots=resident_cache_policy(config))
+                                pin_slots=cfg.cache_policy_pins(config))
     finally:
         stop_server(proc)
 

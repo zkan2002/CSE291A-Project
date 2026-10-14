@@ -51,10 +51,10 @@ from typing import Any, Callable
 
 import httpx
 
+from agentserve import config as cfg
 from agentserve.experiment import run_experiment
 
 AXES = ("policy", "concurrency", "memory_budget", "arrival_rate", "cache_policy")
-CACHE_POLICIES = ("resident", "offload", "off")
 RUNS_DIR = "runs"
 PARTIAL_SUFFIX = ".partial"
 SWEEP_FILE = "sweep.json"
@@ -78,7 +78,7 @@ class Cell:
 
     @property
     def is_real(self) -> bool:
-        return self.config["runtime"]["kind"] == "llama_server"
+        return cfg.is_real(self.config)
 
 
 def expand(sweep: dict[str, Any]) -> list[Cell]:
@@ -102,47 +102,21 @@ def expand(sweep: dict[str, Any]) -> list[Cell]:
 
 def _cell(base: dict, axes: dict, seed: int, slots: int | str) -> Cell:
     c = copy.deepcopy(base)
-    real = c["runtime"]["kind"] == "llama_server"
-    target = c["server"] if real else c["runtime"]
     c["run"]["seed"] = seed
     if axes["policy"] is not None:
         c["policy"]["name"] = axes["policy"]
     if axes["concurrency"] is not None:
         c["policy"]["concurrency"] = axes["concurrency"]
     if axes["memory_budget"] is not None:
-        target["memory_budget" if real else "memory_budget_tokens"] = axes["memory_budget"]
+        cfg.set_memory_budget_tokens(c, axes["memory_budget"])
     if axes["arrival_rate"] is not None:
         c["workload"]["arrival_rate_per_s"] = axes["arrival_rate"]
-    target["slots" if real else "n_slots"] = (
-        c["policy"]["concurrency"] if slots == "concurrency" else slots)
+    cfg.set_slots(c, c["policy"]["concurrency"] if slots == "concurrency" else slots)
     if axes["cache_policy"] is not None:
-        _apply_cache_policy(target, axes["cache_policy"], real)
-    budget = target["memory_budget" if real else "memory_budget_tokens"]
-    cache = axes["cache_policy"] or _cache_policy_of(target)
-    name = (f"{c['policy']['name']}-n{c['policy']['concurrency']}-b{budget}"
-            f"-r{c['workload']['arrival_rate_per_s']:g}-{cache}-s{seed}")
+        cfg.set_cache_policy(c, axes["cache_policy"])
+    name = (f"{c['policy']['name']}-n{c['policy']['concurrency']}-b{cfg.memory_budget_tokens(c)}"
+            f"-r{c['workload']['arrival_rate_per_s']:g}-{cfg.cache_policy(c)}-s{seed}")
     return Cell(name, c)
-
-
-def _apply_cache_policy(target: dict, policy: str, real: bool) -> None:
-    ram_key = "cache_ram_mib" if real else "cache_ram_tokens"
-    if policy == "resident":
-        target.update(cache_prompt=True, cache_idle_slots=False)
-    elif policy == "offload":
-        if not target.get(ram_key):
-            raise ValueError(f"the offload cache policy needs a host-RAM prompt cache: "
-                             f"set {ram_key} in the base config")
-        target.update(cache_prompt=True, cache_idle_slots=True)
-    elif policy == "off":
-        target.update(cache_prompt=False, cache_idle_slots=False, **{ram_key: 0})
-    else:
-        raise ValueError(f"unknown cache policy {policy!r} (expected one of {CACHE_POLICIES})")
-
-
-def _cache_policy_of(target: dict) -> str:
-    if target.get("cache_prompt") is False:
-        return "off"
-    return "offload" if target.get("cache_idle_slots") else "resident"
 
 
 @dataclass

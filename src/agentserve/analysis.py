@@ -31,6 +31,7 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
+from agentserve import config as cfg
 from agentserve.recorder import (DECISIONS_FILE, REQUESTS_FILE, SAMPLES_FILE, TASKS_FILE,
                                  UNLOADED_FILE, WINDOW_FILE)
 from agentserve.workload import TaskClass, WorkloadConfig
@@ -172,22 +173,12 @@ def config_params(config: dict) -> dict:
     """The parameters a sweep varies: admission policy, N, memory budget, arrival
     rate and cache policy (``resident``, ``offload``, ``off``; ``None`` when the
     config doesn't set one)."""
-    runtime, server = config.get("runtime", {}), config.get("server", {})
-    cache = server if server else runtime
-    if cache.get("cache_prompt") is False:
-        cache_policy = "off"
-    elif "cache_idle_slots" in cache:
-        cache_policy = "offload" if cache["cache_idle_slots"] else "resident"
-    elif runtime.get("kind") == "simulated":  # the simulated runtime's default
-        cache_policy = "resident"
-    else:
-        cache_policy = None
     return {
         "policy": config.get("policy", {}).get("name"),
         "concurrency": config.get("policy", {}).get("concurrency"),
-        "memory_budget_tokens": runtime.get("memory_budget_tokens") or server.get("memory_budget"),
+        "memory_budget_tokens": cfg.memory_budget_tokens(config),
         "arrival_rate_per_s": config.get("workload", {}).get("arrival_rate_per_s"),
-        "cache_policy": cache_policy,
+        "cache_policy": cfg.cache_policy(config),
     }
 
 
@@ -237,8 +228,7 @@ def fittable_classes(config: dict) -> set[str] | None:
     """Task classes whose longest agent task fits the memory budget on its own: its
     last model request (prompt plus ``n_predict``) needs at most the whole KV pool.
     ``None`` when the config does not give the classes and the budget."""
-    budget = (config.get("runtime", {}).get("memory_budget_tokens")
-              or config.get("server", {}).get("memory_budget"))
+    budget = cfg.memory_budget_tokens(config)
     if budget is None or "workload" not in config:
         return None
     classes = WorkloadConfig.from_config(config["workload"]).classes
