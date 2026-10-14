@@ -22,6 +22,22 @@ A **real run** (`[runtime] kind = "llama_server"`) writes the same files in the 
 
 All times are seconds since the experiment started, on the run's clock (virtual for the simulated runtime, `perf_counter` wall time for a real run). Lines are JSON objects with sorted keys, so the same config and seed give byte-identical files on the virtual clock. A simulated run never writes the real-run files; the only wall-time measurement in its run directory is `decisions.jsonl`, which is therefore not byte-identical across repeats (every other file is). Nothing is dropped: a failed model request or failed task still gets its line.
 
+## Admission policy and failure accounting
+
+```toml
+[policy]
+name = "request_level_fifo"  # or "task_level_fifo"
+concurrency = 4              # N
+pin_slots = true             # optional; default: follow the cache policy
+```
+
+- `task_level_fifo` (task-level admission): an agent task holds one of N places from its first admission until it finishes, tool delays included.
+- `request_level_fifo` (request-level admission): each model request queues FIFO with at most N in flight; after its tool delay an agent task's next step joins the back of the queue.
+
+**Pinning.** With `pin_slots`, model requests are pinned to a slot with `id_slot` where possible: task-level pins each agent task to the slot it was admitted on; request-level pins each step to the slot of its task's previous step if that slot is free, else to a free slot no other agent task under way was last on, else to any free slot (with none free, the runtime chooses). By default pinning follows the cache policy (pilot amendment 6): **resident** (`cache_idle_slots = false`) pins, **offload** (`cache_idle_slots = true`) does not, so offloaded context comes back through the host-RAM prompt cache. The flag is read from `[server]` in a real run and `[runtime]` in a simulated one; the unloaded measurement pins the same way.
+
+**Failures.** The proxy never retries a failed model request: the first error ends the agent task as a failed task with that error as its `failure`. An agent task still running `hard_timeout_s` (from `unloaded.jsonl`) after it arrived fails with `timeout`: the model request it waits on is cancelled and recorded with `error = "timeout"` (`admitted_s = null` if it was still queued for admission); one in a tool delay simply ends. A task without a hard timeout (it failed even when run alone) has none. Failed tasks stay in `tasks.jsonl` and in every denominator.
+
 ## Real runs
 
 `agentserve run configs/real-smoke.toml --out RUN_DIR` runs the experiment against the pinned llama-server. The config has a `[server]` table in the launcher's format (`agentserve.server`; the memory budget and slot count come from there) and:
@@ -51,14 +67,14 @@ The adapter (`agentserve.llama_runtime`) sends each model request to `/completio
 | --- | --- |
 | `task_id`, `step` | The agent task and the index of its agent step. |
 | `arrived_s` | When the model request reached the proxy. |
-| `admitted_s` | When the admission policy admitted it and it was sent to the runtime. |
+| `admitted_s` | When the admission policy admitted it and it was sent to the runtime; `null` if its agent task hit its hard timeout first. |
 | `first_token_s` | Completion time minus the runtime's decode time; `null` on error. |
-| `completed_s` | When the runtime returned a completion or an error. |
+| `completed_s` | When the runtime returned a completion or an error (or the hard timeout cancelled it). |
 | `n_prompt_tokens` | Prompt length in tokens. |
 | `n_cached_tokens` | Prompt tokens served from retained context; `null` on error. |
 | `n_predict` | Output tokens requested (EOS ignored, so a completion has exactly this many). |
 | `n_output_tokens` | Generated tokens (0 on error). |
-| `slot` | Slot the runtime used (or the pinned slot, on error). |
+| `slot` | Slot the runtime used (or the pinned slot, on error; `null` if unpinned or never admitted). |
 | `error` | `null`, or the typed error: `pool_exhausted`, `exceeds_context`, `server_error`, `timeout`. |
 
 ## `tasks.jsonl`
@@ -71,7 +87,7 @@ The adapter (`agentserve.llama_runtime`) sends each model request to `/completio
 | `completed_s` | When the agent task finished (successfully or not). |
 | `failure` | `null`, or the cause of the failed task (the error of its failing model request). |
 
-An agent task is *active* from `step_admitted_s[0]` to `completed_s`.
+An agent task is *active* from `step_admitted_s[0]` to `completed_s` (never, if it timed out before its first admission: `step_admitted_s` is then empty).
 
 ## `prompts.jsonl`
 
@@ -82,7 +98,7 @@ An agent task is *active* from `step_admitted_s[0]` to `completed_s`.
 
 ## `unloaded.jsonl`
 
-Before the experiment, every agent task of the workload is run alone on an otherwise idle runtime (a fresh one, on its own clock), one after another, through the same proxy and runtime interface, under task-level admission with N=1. The measurement does not depend on the run's admission policy, so every policy is judged against the same task SLOs.
+Before the experiment, every agent task of the workload is run alone on an otherwise idle runtime (a fresh one, on its own clock), one after another, through the same proxy and runtime interface, under task-level admission with N=1 (pinned or not as the cache policy has it, without `pin_slots`'s override). The measurement does not depend on the run's admission policy, so every policy is judged against the same task SLOs.
 
 | Field | Meaning |
 | --- | --- |
@@ -150,7 +166,7 @@ agentserve report PATH... --out REPORT_DIR [--window-start S] [--window-end S]
 | `goodput_tasks_per_min`, `slo_attainment` | See `unloaded.jsonl` above; `nan` without it. |
 | `goodput_fittable_tasks_per_min`, `slo_attainment_fittable` | The same, restricted to task classes that fit the memory budget: a class fits when its longest agent task's last model request (prompt plus `n_predict`, i.e. `initial + steps_max x output + (steps_max - 1) x tool_result` tokens) is at most the budget (`runtime.memory_budget_tokens` or `server.memory_budget`). Agent tasks of the other classes still count as failed tasks in every other metric. `nan` if the config does not give the classes and budget. |
 | `completion_latency_p50_s`, `_p95_s`, `_p99_s` | Completion minus arrival over completed agent tasks (linear interpolation). |
-| `queueing_mean_s`, `queueing_p95_s` | `admitted_s - arrived_s` per model request, failed ones included. |
+| `queueing_mean_s`, `queueing_p95_s` | `admitted_s - arrived_s` per model request, failed ones included (`completed_s - arrived_s` for one never admitted). |
 | `peak_vram_mib`, `peak_host_ram_mib` | Largest `vram_used_bytes` and `server_rss_bytes` sample; `nan` without `samples.jsonl`. |
 | `failure_rate`, `failure_rate.<cause>` | Failed tasks over all measured agent tasks, overall and per cause (the four typed errors always, others when seen). |
 | `cached_tokens_per_request`, `cached_token_fraction` | Over successful model requests: mean `n_cached_tokens`, and cached over prompt tokens. |

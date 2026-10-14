@@ -20,8 +20,9 @@ tool_delay_median_s = 1.0 # log-normal tool delay
 tool_delay_sigma = 0.5
 
 [policy]
-name = "task_level_fifo"
-concurrency = 4
+name = "task_level_fifo"  # or "request_level_fifo"
+concurrency = 4           # N
+# pin_slots = true        # id_slot pinning; default: pinned under the resident cache policy only
 
 [runtime]
 kind = "simulated"
