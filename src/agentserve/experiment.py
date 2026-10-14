@@ -47,13 +47,13 @@ def run_experiment(config: dict[str, Any], run_dir: Path, *,
     recorder = Recorder(run_dir, config, record_prompts=run.get("record_prompts", False))
     try:
         # Unloaded completion times, task SLOs and hard timeouts (by task_id).
-        # TODO(#6): enforce ``targets[task_id].hard_timeout_s`` in the proxy.
         targets = {r.task_id: r for r in _unloaded(config, tasks, unloaded_cache_dir)}
         recorder.unloaded(targets.values())
         proxy = Proxy(policy=build_policy(policy_cfg["name"], concurrency=policy_cfg["concurrency"]),
                       runtime=runtime, clock=clock, recorder=recorder,
                       memory_budget_tokens=runtime_cfg["memory_budget_tokens"],
-                      n_slots=runtime_cfg["n_slots"])
+                      n_slots=runtime_cfg["n_slots"],
+                      hard_timeouts={t: r.hard_timeout_s for t, r in targets.items()})
         clock.run(proxy.run(tasks))
     finally:
         recorder.close()

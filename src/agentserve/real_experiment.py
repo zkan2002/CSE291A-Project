@@ -48,7 +48,6 @@ def run_real_experiment(config: dict[str, Any], run_dir: Path, *,
         recorder.metadata(metadata)
         targets = _unloaded(config, tasks, unloaded_cache_dir,
                             measure_real=lambda: _measure_unloaded(config, server, tasks, run_dir))
-        # TODO(#6): enforce ``hard_timeout_s`` in the proxy (as for simulated runs).
         recorder.unloaded(targets)
         launched = time.perf_counter()
         proc = start_server(server, log_path=run_dir / SERVER_LOG_FILE)
@@ -56,7 +55,8 @@ def run_real_experiment(config: dict[str, Any], run_dir: Path, *,
             metadata["server_startup_s"] = round(time.perf_counter() - launched, 3)
             recorder.metadata(metadata)
             clock = RealClock()
-            clock.run(_run(config, server, proc.pid, tasks, recorder, clock))
+            hard_timeouts = {r.task_id: r.hard_timeout_s for r in targets}
+            clock.run(_run(config, server, proc.pid, tasks, recorder, clock, hard_timeouts))
         finally:
             stop_server(proc)
     finally:
@@ -64,7 +64,8 @@ def run_real_experiment(config: dict[str, Any], run_dir: Path, *,
 
 
 async def _run(config: dict[str, Any], server: ServerConfig, server_pid: int,
-               tasks: list[AgentTaskSpec], recorder: Recorder, clock: RealClock) -> None:
+               tasks: list[AgentTaskSpec], recorder: Recorder, clock: RealClock,
+               hard_timeouts: dict[int, float | None]) -> None:
     runtime_cfg, policy_cfg = config["runtime"], config["policy"]
     timeout = httpx.Timeout(runtime_cfg.get("request_timeout_s", 600.0), connect=10.0)
     # no connection cap: the runtime's own queue, not the HTTP client, holds waiting requests
@@ -80,7 +81,8 @@ async def _run(config: dict[str, Any], server: ServerConfig, server_pid: int,
                           runtime=LlamaServerRuntime(server.base_url, client=client,
                                                      cache_prompt=server.cache_prompt),
                           clock=clock, recorder=recorder,
-                          memory_budget_tokens=server.memory_budget, n_slots=server.slots)
+                          memory_budget_tokens=server.memory_budget, n_slots=server.slots,
+                          hard_timeouts=hard_timeouts)
             await proxy.run(tasks)
         finally:
             await sampler.stop(sampling)

@@ -22,7 +22,7 @@ class RequestRecord:
     task_id: int
     step: int
     arrived_s: float
-    admitted_s: float
+    admitted_s: float | None
     first_token_s: float | None
     completed_s: float
     n_prompt_tokens: int

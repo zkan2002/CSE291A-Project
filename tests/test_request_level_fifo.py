@@ -9,6 +9,8 @@ point on the virtual clock, and checks only what lands in the run directory
 import json
 from pathlib import Path
 
+import pytest
+
 from agentserve.cli import main
 
 CONFIG = """\
@@ -133,3 +135,36 @@ def test_a_large_n_on_a_small_memory_budget_fails_agent_tasks_with_pool_exhauste
     assert metrics["failed_tasks"] == len(failed)
     # (analyze prints three decimals)
     assert metrics["slo_attainment"] <= (len(tasks) - len(failed)) / len(tasks) + 0.0005
+
+
+@pytest.mark.parametrize("policy", ["task_level_fifo", "request_level_fifo"])
+def test_an_agent_task_that_exceeds_its_hard_timeout_fails_with_cause_timeout(tmp_path, policy):
+    # ~2 agent tasks/s against N=1: later agent tasks wait far longer than
+    # 10x their unloaded completion time.
+    run_dir = run(tmp_path, policy=policy, arrival_rate=2.0, concurrency=1, duration_s=30)
+
+    tasks = read_jsonl(run_dir / "tasks.jsonl")
+    requests = read_jsonl(run_dir / "requests.jsonl")
+    hard_timeout = {u["task_id"]: u["hard_timeout_s"]
+                    for u in read_jsonl(run_dir / "unloaded.jsonl")}
+    timed_out = [t for t in tasks if t["failure"] == "timeout"]
+    assert timed_out
+    for t in tasks:
+        # no agent task outlives its hard timeout
+        assert t["completed_s"] - t["arrived_s"] <= hard_timeout[t["task_id"]] + 1e-9
+    for t in timed_out:
+        assert t["completed_s"] - t["arrived_s"] == pytest.approx(hard_timeout[t["task_id"]])
+        own = sorted((r for r in requests if r["task_id"] == t["task_id"]),
+                     key=lambda r: r["step"])
+        assert [r["step"] for r in own] == list(range(len(own)))
+        assert all(r["error"] is None for r in own[:-1])
+        if own[-1]["error"] is not None:
+            # it timed out waiting on a model request (queued or in flight),
+            # which is recorded as failed by the timeout; otherwise it timed
+            # out during a tool delay
+            assert own[-1]["error"] == "timeout"
+            assert own[-1]["completed_s"] == pytest.approx(t["completed_s"])
+    # it timed out waiting for admission, so its model request was never admitted
+    assert any(r["error"] == "timeout" and r["admitted_s"] is None for r in requests)
+    # capacity a timed-out task held is given back: the N=1 bound still holds
+    assert max_in_flight(requests) == 1

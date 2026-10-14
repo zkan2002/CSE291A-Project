@@ -125,13 +125,13 @@ def analyze(run_dir: Path, capsys) -> dict[str, float]:
 def test_under_heavy_load_goodput_falls_below_throughput(tmp_path, capsys):
     run_dir = tmp_path / "run"
     # ~2 agent tasks/s against N=2: agent tasks queue for admission far longer
-    # than 3x their unloaded completion time.
+    # than 3x their unloaded completion time (and some past their 10x hard timeout).
     main(["run", str(write_config(tmp_path, arrival_rate=2.0, concurrency=2)),
           "--out", str(run_dir)])
 
     metrics = analyze(run_dir, capsys)
 
-    assert metrics["failed_tasks"] == 0
+    assert metrics["failed_tasks"] < metrics["agent_tasks"]
     assert metrics["throughput_tasks_per_min"] > 0
     assert metrics["goodput_tasks_per_min"] < 0.5 * metrics["throughput_tasks_per_min"]
 

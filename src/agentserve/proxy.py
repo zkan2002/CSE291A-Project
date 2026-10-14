@@ -3,19 +3,22 @@ model request through the admission policy and the runtime interface, waits
 out tool delays, and records everything.
 
 The proxy never retries a failed model request: the first runtime failure
-ends the agent task as a failed task.
+ends the agent task as a failed task. So does its hard timeout, counted from
+its arrival: the model request it is waiting on (queued or in flight) is
+cancelled and recorded with the error ``timeout``.
 """
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from typing import Mapping
 
 from agentserve.clock import Clock
 from agentserve.policy import (ActiveRequest, AdmissionPolicy, PendingRequest,
                                ProxyState, RequestRef)
 from agentserve.recorder import Recorder, RequestRecord, TaskRecord
-from agentserve.runtime import ModelRequest, Runtime, RuntimeFailure
+from agentserve.runtime import ModelRequest, RequestTimeout, Runtime, RuntimeFailure
 from agentserve.workload import AgentTaskSpec
 
 
@@ -27,13 +30,17 @@ class _Waiting:
 
 class Proxy:
     def __init__(self, *, policy: AdmissionPolicy, runtime: Runtime, clock: Clock,
-                 recorder: Recorder, memory_budget_tokens: int, n_slots: int) -> None:
+                 recorder: Recorder, memory_budget_tokens: int, n_slots: int,
+                 hard_timeouts: Mapping[int, float | None] | None = None) -> None:
+        """``hard_timeouts``: per agent task (by task ID), seconds from its arrival
+        after which it fails with cause ``timeout``; None or absent = no timeout."""
         self._policy = policy
         self._runtime = runtime
         self._clock = clock
         self._recorder = recorder
         self._memory_budget_tokens = memory_budget_tokens
         self._n_slots = n_slots
+        self._hard_timeouts = dict(hard_timeouts or {})
         self._waiting: list[_Waiting] = []
         self._active: dict[RequestRef, ActiveRequest] = {}
         self._admitted_tasks: dict[int, int | None] = {}
@@ -47,25 +54,46 @@ class Proxy:
 
     async def _run_task(self, spec: AgentTaskSpec) -> None:
         arrived = self._clock.now()
-        prompt = list(spec.initial_prompt)
         step_admitted: list[float] = []
         failure = None
-        for k, step in enumerate(spec.steps):
-            request = ModelRequest(tuple(prompt), step.n_predict)
-            self._recorder.prompt(spec.task_id, k, request.prompt_tokens)
-            try:
-                output = await self._model_request(spec.task_id, k, request, step_admitted)
-            except RuntimeFailure as e:
-                failure = e.kind
-                break
-            prompt += output
-            prompt += step.tool_result_tokens
-            await self._clock.sleep(step.tool_delay_s)
+        steps = self._run_steps(spec, step_admitted)
+        hard_timeout = self._hard_timeouts.get(spec.task_id)
+        try:
+            if hard_timeout is None:
+                await steps
+            else:
+                await self._within(steps, hard_timeout)
+        except RuntimeFailure as e:
+            failure = e.kind
         self._admitted_tasks.pop(spec.task_id, None)
         self._recorder.task(TaskRecord(
             task_id=spec.task_id, task_class=spec.task_class, arrived_s=arrived,
             step_admitted_s=step_admitted, completed_s=self._clock.now(), failure=failure))
         self._schedule()
+
+    async def _run_steps(self, spec: AgentTaskSpec, step_admitted: list[float]) -> None:
+        """The agent task's agent steps; the first failed model request raises."""
+        prompt = list(spec.initial_prompt)
+        for k, step in enumerate(spec.steps):
+            request = ModelRequest(tuple(prompt), step.n_predict)
+            self._recorder.prompt(spec.task_id, k, request.prompt_tokens)
+            output = await self._model_request(spec.task_id, k, request, step_admitted)
+            prompt += output
+            prompt += step.tool_result_tokens
+            await self._clock.sleep(step.tool_delay_s)
+
+    async def _within(self, steps, seconds: float) -> None:
+        """Run ``steps`` under a hard timeout: past it, cancel them (the model request
+        they wait on is recorded as failed) and raise ``RequestTimeout``."""
+        work = asyncio.ensure_future(steps)
+        timer = asyncio.ensure_future(self._clock.sleep(seconds))
+        await asyncio.wait({work, timer}, return_when=asyncio.FIRST_COMPLETED)
+        if work.done():
+            timer.cancel()
+            return work.result()
+        work.cancel()
+        await asyncio.gather(work, return_exceptions=True)
+        raise RequestTimeout(f"agent task exceeded its hard timeout ({seconds:.3f} s)")
 
     async def _model_request(self, task_id: int, step: int, request: ModelRequest,
                              step_admitted: list[float]) -> tuple[int, ...]:
@@ -76,7 +104,16 @@ class Proxy:
             asyncio.get_running_loop().create_future())
         self._waiting.append(waiting)
         self._schedule()
-        slot = await waiting.admitted
+        try:
+            slot = await waiting.admitted
+        except asyncio.CancelledError:  # hard timeout while queued
+            if not waiting.admitted.cancelled():  # admitted in this same instant, never sent
+                del self._active[ref]
+                self._schedule()
+            else:
+                self._waiting.remove(waiting)
+            self._record_request(ref, arrived, None, request, None, error=RequestTimeout.kind)
+            raise
         admitted = self._clock.now()
         step_admitted.append(admitted)
         pinned = ModelRequest(request.prompt_tokens, request.n_predict, slot)
@@ -84,6 +121,9 @@ class Proxy:
             completion = await self._runtime.submit(pinned)
         except RuntimeFailure as e:
             self._record_request(ref, arrived, admitted, request, slot, error=e.kind)
+            raise
+        except asyncio.CancelledError:  # hard timeout while in flight
+            self._record_request(ref, arrived, admitted, request, slot, error=RequestTimeout.kind)
             raise
         finally:
             del self._active[ref]
@@ -114,7 +154,7 @@ class Proxy:
             self._admitted_tasks.setdefault(p.ref.task_id, admission.slot)
             waiting.admitted.set_result(admission.slot)
 
-    def _record_request(self, ref: RequestRef, arrived: float, admitted: float,
+    def _record_request(self, ref: RequestRef, arrived: float, admitted: float | None,
                         request: ModelRequest, slot: int | None, *, error: str | None = None,
                         first_token_s: float | None = None, n_cached: int | None = None,
                         n_output: int = 0) -> None:

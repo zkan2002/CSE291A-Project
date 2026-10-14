@@ -74,9 +74,12 @@ def test_one_command_runs_an_experiment_into_a_run_directory(tmp_path):
 
 
 def max_active_agent_tasks(tasks: list[dict]) -> int:
-    """An agent task is active from its first admission until it completes."""
+    """An agent task is active from its first admission until it completes (one
+    that timed out before its first admission never was)."""
     events = []
     for t in tasks:
+        if not t["step_admitted_s"]:
+            continue
         events.append((t["step_admitted_s"][0], 1))
         events.append((t["completed_s"], -1))
     active = peak = 0
@@ -96,7 +99,7 @@ def test_task_level_admission_never_has_more_than_n_agent_tasks_active(tmp_path)
     tasks = read_jsonl(run_dir / "tasks.jsonl")
     assert max_active_agent_tasks(tasks) == 3
     # and agent tasks really did queue for admission
-    assert any(t["step_admitted_s"][0] > t["arrived_s"] for t in tasks)
+    assert any(t["step_admitted_s"] and t["step_admitted_s"][0] > t["arrived_s"] for t in tasks)
 
 
 def test_same_config_and_seed_produce_identical_recorded_output(tmp_path):

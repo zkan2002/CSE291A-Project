@@ -31,12 +31,12 @@ steps = [8, 12]
 POLICY_AND_RUNTIME = """\
 [policy]
 name = "task_level_fifo"
-concurrency = 4
+concurrency = 32  # enough that no agent task queues into its hard timeout
 
 [runtime]
 kind = "simulated"
-n_slots = 4
-memory_budget_tokens = 131072  # 4 long agent tasks (~11k tokens each) never fill it
+n_slots = 32
+memory_budget_tokens = 393216  # 32 long agent tasks (~11k tokens each) never fill it
 prompt_token_s = 0.0002
 output_token_s = 0.01
 """
