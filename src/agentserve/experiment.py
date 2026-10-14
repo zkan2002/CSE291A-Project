@@ -27,7 +27,8 @@ def simulated_runtime(clock: Clock, runtime_cfg: dict[str, Any]) -> SimulatedRun
                             prompt_token_s=runtime_cfg["prompt_token_s"],
                             output_token_s=runtime_cfg["output_token_s"],
                             cache_ram_tokens=runtime_cfg.get("cache_ram_tokens", 0),
-                            cache_idle_slots=runtime_cfg.get("cache_idle_slots", False))
+                            cache_idle_slots=runtime_cfg.get("cache_idle_slots", False),
+                            cache_prompt=runtime_cfg.get("cache_prompt", True))
 
 
 def resident_cache_policy(config: dict[str, Any]) -> bool:

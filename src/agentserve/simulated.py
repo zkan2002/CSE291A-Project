@@ -34,6 +34,8 @@ Cache policies (pilot amendment 6) map to the server flags:
   unpinned request that takes a slot by LRU, or by a prefix keeping less than
   half the slot's tokens, saves the slot's prompt to host RAM and restores the
   best-matching saved prompt into the slot. The ``id_slot`` path never does.
+- ``cache_prompt = False`` is ``--no-cache-prompt`` (caching off): a slot's
+  retained context is never reused, so every prompt is processed in full.
 - ``cache_idle_slots`` (needs ``cache_ram_tokens``): whenever a request starts,
   every other idle slot's KV is moved to host RAM. Resident = off + pinned
   agent steps; offload = on + unpinned agent steps.
@@ -88,7 +90,8 @@ class SimulatedRuntime:
     def __init__(self, clock: Clock, *, n_slots: int, pool_tokens: int,
                  prompt_token_s: float, output_token_s: float,
                  n_batch: int = 2048, similarity: float = 0.10,
-                 cache_ram_tokens: int = 0, cache_idle_slots: bool = False) -> None:
+                 cache_ram_tokens: int = 0, cache_idle_slots: bool = False,
+                 cache_prompt: bool = True) -> None:
         self._clock = clock
         self._pool_tokens = pool_tokens
         self._prompt_token_s = prompt_token_s
@@ -97,6 +100,7 @@ class SimulatedRuntime:
         self._similarity = similarity
         self._cache_ram_tokens = cache_ram_tokens
         self._cache_idle_slots = cache_idle_slots and cache_ram_tokens > 0
+        self._cache_prompt = cache_prompt
         self._ram: deque[tuple[int, ...]] = deque()
         self._slots = [_Slot(i) for i in range(n_slots)]
         self._queue: deque[_Job] = deque()
@@ -241,7 +245,8 @@ class SimulatedRuntime:
             self._ram.popleft()
 
     def _start(self, job: _Job, slot: _Slot) -> None:
-        n_cached = min(_common_prefix(slot.kv, job.prompt), len(job.prompt) - 1)
+        n_cached = (min(_common_prefix(slot.kv, job.prompt), len(job.prompt) - 1)
+                    if self._cache_prompt else 0)
         del slot.kv[n_cached:]
         slot.job, job.slot = job, slot
         job.n_cached = job.n_done = n_cached

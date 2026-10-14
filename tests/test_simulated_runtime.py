@@ -318,6 +318,23 @@ def test_offload_policy_restores_an_unpinned_step_from_host_ram_onto_another_slo
     assert b.n_cached_tokens == 631
 
 
+def test_caching_off_processes_every_prompt_in_full():
+    # --no-cache-prompt (the "caching off" cache policy): retained context is never reused
+    a = tokens(600, 10_000)
+
+    async def scenario(clock, runtime):
+        first = await runtime.submit(ModelRequest(a, 32, slot=0))
+        b = a + first.output_tokens + tokens(200, 50_000)
+        started = clock.now()
+        second = await runtime.submit(ModelRequest(b, 32, slot=0))
+        return second, clock.now() - started
+
+    second, took = run(scenario, cache_prompt=False)
+
+    assert (second.slot, second.n_cached_tokens, second.n_prompt_tokens) == (0, 0, 832)
+    assert took == pytest.approx(832 * PROMPT_TOKEN_S + 32 * OUTPUT_TOKEN_S)
+
+
 def test_offload_needs_the_host_ram_cache():
     # --cache-idle-slots is silently disabled with --cache-ram 0
     a, b, in_pool, in_ram = run(lambda c, r: agent_pattern(c, r, pin=True),
