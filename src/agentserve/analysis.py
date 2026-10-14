@@ -163,6 +163,8 @@ def config_params(config: dict) -> dict:
         cache_policy = "off"
     elif "cache_idle_slots" in cache:
         cache_policy = "offload" if cache["cache_idle_slots"] else "resident"
+    elif runtime.get("kind") == "simulated":  # the simulated runtime's default
+        cache_policy = "resident"
     else:
         cache_policy = None
     return {

@@ -415,3 +415,26 @@ def test_the_report_takes_a_metric_window(tmp_path):
     [run] = read_csv(out / "runs.csv")
     assert run["agent_tasks"] == "1"
     assert float(run["throughput_tasks_per_min"]) == pytest.approx(2.0)
+
+
+@pytest.mark.parametrize("tables, expected", [
+    ({"runtime": {"kind": "simulated"}}, "resident"),
+    ({"runtime": {"kind": "simulated", "cache_idle_slots": True, "cache_ram_tokens": 9000}},
+     "offload"),
+    ({"runtime": {"kind": "llama_server"},
+      "server": {"memory_budget": 8192, "cache_idle_slots": False, "cache_prompt": True}},
+     "resident"),
+    ({"runtime": {"kind": "llama_server"},
+      "server": {"memory_budget": 8192, "cache_idle_slots": True, "cache_prompt": True}},
+     "offload"),
+    ({"runtime": {"kind": "llama_server"},
+      "server": {"memory_budget": 8192, "cache_idle_slots": False, "cache_prompt": False}},
+     "off"),
+])
+def test_configurations_are_labelled_with_their_cache_policy(tmp_path, tables, expected):
+    run_dir = tmp_path / "run"
+    write_run(run_dir, [task(0, 0.0, 5.0)], config={**run_config(1), **tables})
+
+    [config] = aggregate([summarize(run_dir)])
+
+    assert config.params["cache_policy"] == expected
