@@ -46,7 +46,8 @@ def run_real_experiment(config: dict[str, Any], run_dir: Path, *,
         metadata = collect_run_metadata(server)
         recorder.metadata(metadata)
         targets = _unloaded(config, tasks, unloaded_cache_dir,
-                            measure_real=lambda: _measure_unloaded(config, server, tasks, run_dir))
+                            measure_real=lambda subset: _measure_unloaded(config, server, subset,
+                                                                          run_dir))
         recorder.unloaded(targets)
         launched = time.perf_counter()
         proc = start_server(server, log_path=run_dir / SERVER_LOG_FILE)

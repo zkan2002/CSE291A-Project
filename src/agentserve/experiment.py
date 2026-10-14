@@ -80,20 +80,21 @@ def run_experiment(config: dict[str, Any], run_dir: Path, *,
 def _unloaded(config: dict[str, Any], tasks, cache_dir: Path | None,
               measure_real=None) -> list[unloaded.UnloadedRecord]:
     """Each agent task run alone on a fresh, idle runtime with its own clock.
-    Cached per (workload, runtime config): the admission policy is not part of the key.
-    A real run passes ``measure_real``, which measures on a fresh llama-server."""
-    run, runtime_cfg = config["run"], config["runtime"]
-    key = {"workload": config["workload"], "seed": run["seed"], "duration_s": run["duration_s"],
-           "split": run.get("split", "dev"), "runtime": runtime_cfg}
+    Cached per agent task and runtime config (``unloaded.cached``): neither the
+    admission policy, the arrival process nor the slot count is part of the key.
+    A real run passes ``measure_real(tasks)``, which measures on a fresh llama-server."""
+    runtime_cfg = config["runtime"]
+    key = {"runtime": {k: v for k, v in runtime_cfg.items() if k != "n_slots"}}
     if "server" in config:  # real runs: the server launch config is part of the runtime
-        key["server"] = config["server"]
+        key["server"] = {k: v for k, v in config["server"].items()
+                         if k not in ("host", "port", "slots")}
 
-    def measure() -> list[unloaded.UnloadedRecord]:
+    def measure(subset) -> list[unloaded.UnloadedRecord]:
         clock = VirtualClock()
         runtime = simulated_runtime(clock, runtime_cfg)
-        return unloaded.measure(tasks, clock=clock, runtime=runtime,
+        return unloaded.measure(subset, clock=clock, runtime=runtime,
                                 memory_budget_tokens=runtime_cfg["memory_budget_tokens"],
                                 n_slots=runtime_cfg["n_slots"],
                                 pin_slots=resident_cache_policy(config))
 
-    return unloaded.cached(key, cache_dir, measure_real or measure)
+    return unloaded.cached(key, cache_dir, tasks, measure_real or measure)

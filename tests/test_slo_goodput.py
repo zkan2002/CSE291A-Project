@@ -112,6 +112,32 @@ def test_unloaded_completion_times_are_cached_per_workload_and_runtime_config(tm
     assert all(u["unloaded_completion_s"] == 1234.0 for u in again)
 
 
+def test_unloaded_completion_times_are_cached_per_agent_task_across_rates_and_slot_counts(tmp_path):
+    cache = tmp_path / "cache"
+    main(["run", str(write_config(tmp_path, arrival_rate=0.5, name="slow")),
+          "--out", str(tmp_path / "slow"), "--unloaded-cache", str(cache)])
+    [entry] = cache.iterdir()
+    cached = json.loads(entry.read_text())
+    for r in cached["records"]:
+        r["unloaded_completion_s"] = 1234.0
+    entry.write_text(json.dumps(cached))
+
+    # same seed at a higher arrival rate, on more slots: the same agent tasks come
+    # first, then more of them; running alone, the slot count makes no difference
+    main(["run", str(write_config(tmp_path, arrival_rate=1.0, concurrency=8, n_slots=8,
+                                  name="fast")),
+          "--out", str(tmp_path / "fast"), "--unloaded-cache", str(cache)])
+
+    slow = read_jsonl(tmp_path / "slow" / "unloaded.jsonl")
+    fast = read_jsonl(tmp_path / "fast" / "unloaded.jsonl")
+    assert len(fast) > len(slow)
+    reused = [u for u in fast if u["unloaded_completion_s"] == 1234.0]
+    assert sorted(u["task_id"] for u in reused) == sorted(u["task_id"] for u in slow)
+    # only the agent tasks not measured before were measured
+    assert all(u["unloaded_completion_s"] < 100 for u in fast if u not in reused)
+    assert len(list(cache.iterdir())) == 1
+
+
 def analyze(run_dir: Path, capsys) -> dict[str, float]:
     capsys.readouterr()
     main(["analyze", str(run_dir)])

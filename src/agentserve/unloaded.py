@@ -77,29 +77,50 @@ def measure(tasks: list[AgentTaskSpec], *, clock: Clock, runtime: Runtime,
             for t in sink.tasks]
 
 
-def cached(key: dict[str, Any], cache_dir: Path | None,
-           measure_fn: Callable[[], list[UnloadedRecord]]) -> list[UnloadedRecord]:
-    """``measure_fn()``, cached in ``cache_dir`` under ``key``: the inputs that
-    determine the workload and the runtime (not the admission policy)."""
+def cached(key: dict[str, Any], cache_dir: Path | None, tasks: list[AgentTaskSpec],
+           measure_fn: Callable[[list[AgentTaskSpec]], list[UnloadedRecord]]
+           ) -> list[UnloadedRecord]:
+    """Each agent task's unloaded measurement, cached per agent task in
+    ``cache_dir`` under ``key``: the runtime config that determines how fast an
+    agent task runs alone (not the admission policy, the arrival process or the
+    slot count). An agent task is identified by its content (``task_digest``),
+    so a run at a higher arrival rate, or with another N, reuses the
+    measurements of the agent tasks it shares with earlier runs, and
+    ``measure_fn`` measures only the rest. Returns one record per agent task,
+    in task-ID order."""
+    tasks = sorted(tasks, key=lambda t: t.task_id)
     if cache_dir is None:
-        return measure_fn()
+        return measure_fn(tasks)
     digest = hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()[:16]
     path = cache_dir / f"unloaded-{digest}.json"
+    known: dict[str, dict] = {}
     if path.exists():
         entry = json.loads(path.read_text())
         if entry["key"] == key:
-            # Only the measurement is cached; task SLOs and hard timeouts are re-derived.
-            return [UnloadedRecord.from_measurement(r["task_id"], r["task_class"],
-                                                    r["unloaded_completion_s"], r["failure"])
-                    for r in entry["records"]]
-    records = measure_fn()
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    measured = [{"task_id": r.task_id, "task_class": r.task_class,
-                 "unloaded_completion_s": r.unloaded_completion_s, "failure": r.failure}
-                for r in records]
-    path.write_text(json.dumps({"key": key, "records": measured}, indent=1, sort_keys=True)
-                    + "\n")
-    return records
+            known = {r["digest"]: r for r in entry["records"]}
+    digests = {t.task_id: task_digest(t) for t in tasks}
+    missing = [t for t in tasks if digests[t.task_id] not in known]
+    if missing:
+        for r in measure_fn(missing):
+            known[digests[r.task_id]] = {
+                "digest": digests[r.task_id], "task_class": r.task_class,
+                "unloaded_completion_s": r.unloaded_completion_s, "failure": r.failure}
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"key": key, "records": list(known.values())},
+                                   indent=1, sort_keys=True) + "\n")
+    # Only the measurement is cached; task SLOs and hard timeouts are re-derived.
+    return [UnloadedRecord.from_measurement(t.task_id, t.task_class,
+                                            known[digests[t.task_id]]["unloaded_completion_s"],
+                                            known[digests[t.task_id]]["failure"])
+            for t in tasks]
+
+
+def task_digest(spec: AgentTaskSpec) -> str:
+    """An agent task's content, not its ID or arrival time: what its model
+    requests send and how long its tool delays are."""
+    content = [spec.task_class, list(spec.initial_prompt),
+               [[s.n_predict, list(s.tool_result_tokens), s.tool_delay_s] for s in spec.steps]]
+    return hashlib.sha256(json.dumps(content).encode()).hexdigest()
 
 
 class _TaskSink:
