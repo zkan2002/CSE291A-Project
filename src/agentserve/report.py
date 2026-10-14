@@ -77,7 +77,8 @@ def find_run_dirs(paths: list[Path]) -> list[Path]:
 
 
 def write_report(paths: list[Path], out_dir: Path,
-                 window: MetricWindow = MetricWindow()) -> list[Configuration]:
+                 window: MetricWindow | None = None) -> list[Configuration]:
+    """``window``: measure every run over it (default: each run's recorded window)."""
     runs = [summarize(d, window) for d in find_run_dirs(paths)]
     if not runs:
         raise ValueError(f"no run directories under {', '.join(map(str, paths))}")
@@ -86,7 +87,7 @@ def write_report(paths: list[Path], out_dir: Path,
     _runs_csv(runs, out_dir / "runs.csv")
     _configurations_csv(configs, out_dir / "configurations.csv")
     _classes_csv(configs, out_dir / "classes.csv")
-    (out_dir / "metrics.md").write_text(_markdown(configs, window), encoding="utf-8")
+    (out_dir / "metrics.md").write_text(_markdown(configs, runs), encoding="utf-8")
     _plot_vs(configs, "arrival_rate_per_s", [("goodput_tasks_per_min", "goodput (tasks/min)")],
              "Goodput vs arrival rate", "arrival rate (agent tasks/s)",
              out_dir / "goodput_vs_arrival_rate.png")
@@ -155,11 +156,12 @@ def _union(dicts) -> list[str]:
     return list(dict.fromkeys(name for d in dicts for name in d))
 
 
-def _markdown(configs: list[Configuration], window: MetricWindow) -> str:
-    end = "last completion" if window.end_s is None else f"{window.end_s:g} s"
+def _markdown(configs: list[Configuration], runs: list[RunAnalysis]) -> str:
+    windows = sorted({r.window.describe() for r in runs})
     lines = ["# Results", "",
              f"Mean ± 95% CI half-width across seeds (Student's t). Agent tasks arriving in "
-             f"[{window.start_s:g} s, {end}) are measured.", "",
+             f"{' or '.join(windows)} (the measured window{'s' if len(windows) > 1 else ''}, "
+             f"run times in seconds) are measured.", "",
              "## Configurations", ""]
     for i, c in enumerate(configs, 1):
         lines.append(f"- **C{i}**: {_label(c.params)}; seeds {', '.join(map(str, c.seeds))}")

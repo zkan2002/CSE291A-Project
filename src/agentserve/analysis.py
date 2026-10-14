@@ -2,8 +2,9 @@
 
 Metrics are computed over a ``MetricWindow``: the agent tasks that *arrived*
 inside it are measured (with their model requests), and rates are per minute
-over the window's span. The default window starts at t=0 and ends at the last
-agent task's completion, so every agent task is measured.
+over the window's span. By default it is the window the run recorded in
+``window.json`` (the run protocol's measured window, after the warm-up); a run
+directory without one is measured from t=0 to the last agent task's completion.
 
 - Throughput: completed (non-failed) agent tasks per minute.
 - Goodput: agent tasks completed (not failed) within their task SLO
@@ -31,7 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agentserve.recorder import (DECISIONS_FILE, REQUESTS_FILE, SAMPLES_FILE, TASKS_FILE,
-                                 UNLOADED_FILE)
+                                 UNLOADED_FILE, WINDOW_FILE)
 from agentserve.workload import TaskClass, WorkloadConfig
 
 _MIB = 1024 * 1024
@@ -53,11 +54,22 @@ class MetricWindow:
     def contains(self, t: float) -> bool:
         return t >= self.start_s and (self.end_s is None or t < self.end_s)
 
+    @classmethod
+    def recorded(cls, run_dir: Path) -> MetricWindow:
+        """The measured window the run recorded (``window.json``); the whole run if none."""
+        recorded = _read_json(run_dir / WINDOW_FILE)
+        return cls(start_s=recorded.get("start_s", 0.0), end_s=recorded.get("end_s"))
+
+    def describe(self) -> str:
+        end = "last completion" if self.end_s is None else f"{self.end_s:g} s"
+        return f"[{self.start_s:g} s, {end})"
+
 
 @dataclass(frozen=True)
 class RunAnalysis:
     run_dir: Path
     config: dict
+    window: MetricWindow
     metrics: Metrics
     classes: dict[str, Metrics]
     """The same task-level metrics for each task class, over the same window."""
@@ -66,7 +78,10 @@ class RunAnalysis:
         return "\n".join(f"{name}: {_fmt(value)}" for name, value in self.metrics.items())
 
 
-def summarize(run_dir: Path, window: MetricWindow = MetricWindow()) -> RunAnalysis:
+def summarize(run_dir: Path, window: MetricWindow | None = None) -> RunAnalysis:
+    """One run's metrics over ``window`` (default: the run's recorded window)."""
+    if window is None:
+        window = MetricWindow.recorded(run_dir)
     config = _read_json(run_dir / "config.json")
     all_tasks = _read_jsonl(run_dir / TASKS_FILE)
     tasks = [t for t in all_tasks if window.contains(t["arrived_s"])]
@@ -97,7 +112,7 @@ def summarize(run_dir: Path, window: MetricWindow = MetricWindow()) -> RunAnalys
         c.update(_failures(of_class))
         c["fits_budget"] = math.nan if fits is None else int(name in fits)
         classes[name] = c
-    return RunAnalysis(run_dir, config, m, classes)
+    return RunAnalysis(run_dir, config, window, m, classes)
 
 
 @dataclass(frozen=True)

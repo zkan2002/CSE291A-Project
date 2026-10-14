@@ -16,6 +16,8 @@ DECISIONS_FILE = "decisions.jsonl"
 SAMPLES_FILE = "samples.jsonl"
 METADATA_FILE = "metadata.json"
 SERVER_LOG_FILE = "server.log"
+WINDOW_FILE = "window.json"
+COLD_START_FILE = "cold_start.json"
 
 
 @dataclass(frozen=True)
@@ -44,12 +46,27 @@ class TaskRecord:
     failure: str | None
 
 
+def measured_window(config: dict[str, Any]) -> dict[str, float]:
+    """The run protocol's measured window: agent tasks arriving in
+    ``[run.warmup_s, run.duration_s)``. Earlier arrivals are the warm-up (run and
+    logged, never measured); nothing arrives after ``duration_s``, and the run
+    then drains until every agent task has finished or timed out."""
+    run = config["run"]
+    warmup_s = run.get("warmup_s", 0.0)
+    if not 0 <= warmup_s < run["duration_s"]:
+        raise ValueError(f"run.warmup_s ({warmup_s}) must be in [0, run.duration_s "
+                         f"({run['duration_s']}))")
+    return {"start_s": warmup_s, "end_s": run["duration_s"]}
+
+
 class Recorder:
     def __init__(self, run_dir: Path, config: dict[str, Any], *,
                  record_prompts: bool = False) -> None:
         run_dir.mkdir(parents=True, exist_ok=False)
         self._run_dir = run_dir
         (run_dir / CONFIG_FILE).write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        (run_dir / WINDOW_FILE).write_text(json.dumps(measured_window(config), sort_keys=True)
+                                           + "\n")
         self._requests = _open(run_dir / REQUESTS_FILE)
         self._tasks = _open(run_dir / TASKS_FILE)
         self._prompts = _open(run_dir / PROMPTS_FILE) if record_prompts else None

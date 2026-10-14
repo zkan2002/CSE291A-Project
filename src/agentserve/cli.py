@@ -6,7 +6,7 @@
     agentserve report PATH... --out DIR   every table and plot, from run directories
                                           (or directories holding them), across seeds
     analyze and report take [--window-start S] [--window-end S]: measure only the
-    agent tasks arriving in [S, S) (default: the whole run).
+    agent tasks arriving in [S, S) (default: each run's recorded measured window).
 """
 
 from __future__ import annotations
@@ -52,15 +52,19 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _window_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--window-start", type=float, default=0.0, metavar="S",
-                        help="measure agent tasks arriving at or after S seconds (default 0)")
+    parser.add_argument("--window-start", type=float, default=None, metavar="S",
+                        help="measure agent tasks arriving at or after S seconds (default 0 "
+                             "if --window-end is given)")
     parser.add_argument("--window-end", type=float, default=None, metavar="S",
                         help="... and before S seconds; rates are per minute over the window "
-                             "(default: no bound, rates up to the last completion)")
+                             "(default: no bound, rates up to the last completion). Without "
+                             "either flag, each run's recorded measured window is used")
 
 
-def _window(args: argparse.Namespace) -> MetricWindow:
-    return MetricWindow(start_s=args.window_start, end_s=args.window_end)
+def _window(args: argparse.Namespace) -> MetricWindow | None:
+    if args.window_start is None and args.window_end is None:
+        return None  # each run's recorded window
+    return MetricWindow(start_s=args.window_start or 0.0, end_s=args.window_end)
 
 
 if __name__ == "__main__":
