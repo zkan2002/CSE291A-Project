@@ -1,8 +1,8 @@
 """The real runtime: the runtime interface over llama-server's `/completion` endpoint.
 
-Request building and error mapping live in ``agentserve.llama_api`` (shared with
-the pilot); this module only does the HTTP round trip and converts the outcome to
-the runtime interface's ``Completion`` or a typed ``RuntimeFailure``.
+Request building and response parsing live in ``agentserve.llama_api`` (shared
+with the pilot); this module only does the HTTP round trip, returning the
+``Completion`` or raising the typed ``RuntimeFailure`` it parsed.
 """
 
 from __future__ import annotations
@@ -10,15 +10,8 @@ from __future__ import annotations
 import httpx
 
 from agentserve import llama_api
-from agentserve.runtime import (Completion, ExceedsContext, ModelRequest, PoolExhausted,
-                                RequestTimeout, RuntimeFailure, ServerError)
-
-_FAILURES: dict[str, type[RuntimeFailure]] = {
-    "pool_exhausted": PoolExhausted,
-    "exceeds_context": ExceedsContext,
-    "server_error": ServerError,
-    "timeout": RequestTimeout,
-}
+from agentserve.runtime import (Completion, ModelRequest, RequestTimeout, RuntimeFailure,
+                                ServerError)
 
 
 class LlamaServerRuntime:
@@ -44,9 +37,6 @@ class LlamaServerRuntime:
         except ValueError:
             body = response.text
         result = llama_api.parse_completion(response.status_code, body, n_predict=request.n_predict)
-        if isinstance(result, llama_api.RuntimeError_):
-            raise _FAILURES[result.kind](result.message)
-        return Completion(
-            output_tokens=tuple(result.tokens), n_prompt_tokens=result.prompt_tokens,
-            n_cached_tokens=result.cached_tokens, slot=result.id_slot,
-            prompt_s=result.prompt_ms / 1000.0, decode_s=result.predicted_ms / 1000.0)
+        if isinstance(result, RuntimeFailure):
+            raise result
+        return result

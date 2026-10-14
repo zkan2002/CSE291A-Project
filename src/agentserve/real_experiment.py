@@ -39,6 +39,7 @@ from agentserve.experiment import _unloaded, admission_policy, workload_tasks
 from agentserve.llama_runtime import LlamaServerRuntime
 from agentserve.proxy import Proxy
 from agentserve.recorder import SERVER_LOG_FILE, Recorder
+from agentserve.runtime import RuntimeFailure
 from agentserve.run_metadata import collect_run_metadata
 from agentserve.sampler import SystemSampler, real_sources
 from agentserve.server import ServerConfig, start_server, stop_server
@@ -58,7 +59,7 @@ def run_real_experiment(config: dict[str, Any], run_dir: Path, *,
                         unloaded_cache_dir: Path | None = None) -> None:
     server = ServerConfig(**config["server"])
     tasks = workload_tasks(config)
-    recorder = Recorder(run_dir, config, record_prompts=cfg.record_prompts(config))
+    recorder = Recorder(run_dir, config)
     try:
         metadata = collect_run_metadata(server)
         recorder.metadata(metadata)
@@ -147,11 +148,11 @@ def _probe(server: ServerConfig, salt: int) -> dict[str, Any]:
     latency = time.perf_counter() - started
     result = llama_api.parse_completion(response.status_code, response.json(),
                                         n_predict=PROBE_N_PREDICT)
-    if isinstance(result, llama_api.RuntimeError_):
+    if isinstance(result, RuntimeFailure):
         raise RuntimeError(f"cold-start probe failed: {result.kind}: {result.message}")
-    return {"n_prompt_tokens": result.prompt_tokens, "n_predict": PROBE_N_PREDICT,
-            "n_cached_tokens": result.cached_tokens, "latency_s": round(latency, 4),
-            "prompt_s": result.prompt_ms / 1000.0, "decode_s": result.predicted_ms / 1000.0}
+    return {"n_prompt_tokens": result.n_prompt_tokens, "n_predict": PROBE_N_PREDICT,
+            "n_cached_tokens": result.n_cached_tokens, "latency_s": round(latency, 4),
+            "prompt_s": result.prompt_s, "decode_s": result.decode_s}
 
 
 def _measure_unloaded(reference: dict[str, Any], tasks: list[AgentTaskSpec], run_dir: Path,

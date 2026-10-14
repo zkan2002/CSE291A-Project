@@ -7,6 +7,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from agentserve import config as cfg
+
 CONFIG_FILE = "config.json"
 REQUESTS_FILE = "requests.jsonl"
 TASKS_FILE = "tasks.jsonl"
@@ -61,8 +63,8 @@ def measured_window(config: dict[str, Any]) -> dict[str, float]:
 
 
 class Recorder:
-    def __init__(self, run_dir: Path, config: dict[str, Any], *,
-                 record_prompts: bool = False) -> None:
+    def __init__(self, run_dir: Path, config: dict[str, Any]) -> None:
+        """Creates ``run_dir``; ``prompts.jsonl`` too if the config records prompts."""
         run_dir.mkdir(parents=True, exist_ok=False)
         self._run_dir = run_dir
         (run_dir / CONFIG_FILE).write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
@@ -70,7 +72,8 @@ class Recorder:
                                            + "\n")
         self._requests = _open(run_dir / REQUESTS_FILE)
         self._tasks = _open(run_dir / TASKS_FILE)
-        self._prompts = _open(run_dir / PROMPTS_FILE) if record_prompts else None
+        self._prompts = (_open(run_dir / PROMPTS_FILE) if cfg.record_prompts(config)
+                         else None)
         self._decisions = _open(run_dir / DECISIONS_FILE)
         self._kv = _open(run_dir / KV_FILE)
         self._samples = None

@@ -27,12 +27,8 @@ from typing import Any, Awaitable, Callable
 
 import httpx
 
-from agentserve.llama_api import (
-    Completion,
-    completion_payload,
-    parse_completion,
-    synthetic_tokens,
-)
+from agentserve.llama_api import completion_payload, parse_completion, synthetic_tokens
+from agentserve.runtime import Completion
 from agentserve.server import ServerConfig, load_server_config, start_server, stop_server
 
 # Server log lines that carry evidence about the contract clauses.
@@ -85,9 +81,11 @@ class ProbeSession:
                 k: body.get(k) for k in ("stop_type", "truncated", "tokens_cached", "tokens_evaluated")
             }
         if isinstance(result, Completion):
-            outcome = dataclasses.asdict(result)
-            record["_tokens"] = outcome.pop("tokens")
-            record["outcome"] = {"ok": True, **outcome}
+            record["_tokens"] = list(result.output_tokens)
+            record["outcome"] = {
+                "ok": True, "id_slot": result.slot, "prompt_tokens": result.n_prompt_tokens,
+                "cached_tokens": result.n_cached_tokens, "output_tokens": len(result.output_tokens),
+                "prompt_ms": result.prompt_s * 1000.0, "predicted_ms": result.decode_s * 1000.0}
         elif result is not None:
             record["outcome"] = {"ok": False, "kind": result.kind, "message": result.message, "body": result.body}
         else:

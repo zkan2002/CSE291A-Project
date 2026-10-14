@@ -24,7 +24,7 @@ Source = Callable[[], Awaitable[Any]]
 
 class SystemSampler:
     def __init__(self, clock: Clock, sources: Mapping[str, Source],
-                 write: Callable[[dict[str, Any]], None], *, interval_s: float = 0.1) -> None:
+                 write: Callable[[dict[str, Any]], None], *, interval_s: float) -> None:
         self._clock = clock
         self._sources = dict(sources)
         self._write = write

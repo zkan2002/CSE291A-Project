@@ -59,7 +59,7 @@ def run_experiment(config: dict[str, Any], run_dir: Path, *,
 
     tasks = workload_tasks(config)
     runtime = simulated_runtime(clock, runtime_cfg)
-    recorder = Recorder(run_dir, config, record_prompts=cfg.record_prompts(config))
+    recorder = Recorder(run_dir, config)
     try:
         # Unloaded completion times, task SLOs and hard timeouts (by task_id).
         targets = {r.task_id: r for r in _unloaded(config, tasks, unloaded_cache_dir)}

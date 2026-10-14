@@ -2,13 +2,14 @@
 
 ``await runtime.submit(request)`` returns a ``Completion`` or raises a
 ``RuntimeFailure`` subclass. Implementations: the simulated runtime
-(``agentserve.simulated``) and, later, the llama-server HTTP adapter.
+(``agentserve.simulated``) and the llama-server HTTP adapter
+(``agentserve.llama_runtime``, with the wire format in ``agentserve.llama_api``).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
@@ -31,9 +32,21 @@ class Completion:
 
 
 class RuntimeFailure(Exception):
-    """A model request that the runtime did not complete. ``kind`` is what gets recorded."""
+    """A model request that the runtime did not complete. ``kind`` is what gets
+    recorded; a failure from llama-server also keeps its HTTP ``status`` and
+    response ``body`` (``None`` otherwise)."""
 
     kind = "runtime_failure"
+
+    def __init__(self, message: str = "", *, status: int | None = None,
+                 body: Any = None) -> None:
+        super().__init__(message)
+        self.status = status
+        self.body = body
+
+    @property
+    def message(self) -> str:
+        return str(self)
 
 
 class PoolExhausted(RuntimeFailure):

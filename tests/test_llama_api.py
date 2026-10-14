@@ -3,13 +3,10 @@
 Response and error bodies below are copied from the pinned server (b11606) during the pilot.
 """
 
-from agentserve.llama_api import (
-    Completion,
-    RuntimeError_,
-    completion_payload,
-    parse_completion,
-    synthetic_tokens,
-)
+import pytest
+
+from agentserve.llama_api import completion_payload, parse_completion, synthetic_tokens
+from agentserve.runtime import Completion, RuntimeFailure
 
 
 def test_payload_sends_token_array_with_fixed_output_length():
@@ -49,15 +46,15 @@ def test_successful_response_reports_cached_tokens_and_slot():
     }
     result = parse_completion(200, body)
     assert result == Completion(
-        id_slot=1, tokens=[5, 6], prompt_tokens=400, cached_tokens=300, output_tokens=2,
-        prompt_ms=29.2, predicted_ms=14.0,
+        output_tokens=(5, 6), n_prompt_tokens=400, n_cached_tokens=300, slot=1,
+        prompt_s=pytest.approx(0.0292), decode_s=pytest.approx(0.014),
     )
 
 
 def test_pool_overflow_abort_is_pool_exhausted():
     body = {"error": {"code": 500, "message": "Context size has been exceeded.", "type": "server_error"}}
     result = parse_completion(500, body)
-    assert isinstance(result, RuntimeError_)
+    assert isinstance(result, RuntimeFailure)
     assert result.kind == "pool_exhausted"
     assert result.status == 500
 
@@ -98,7 +95,7 @@ def test_output_cut_short_by_the_pool_is_exceeds_context():
     # pilot: a 1900-token prompt with n_predict 300 on a 2048-token pool returned HTTP 200
     # with only 148 output tokens and truncated: true
     result = parse_completion(200, _ok_body(148, truncated=True), n_predict=300)
-    assert isinstance(result, RuntimeError_)
+    assert isinstance(result, RuntimeFailure)
     assert result.kind == "exceeds_context"
     assert result.status == 200
 

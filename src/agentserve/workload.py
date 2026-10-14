@@ -137,7 +137,7 @@ SPLITS = ("dev", "eval")
 
 
 def generate(config: WorkloadConfig, *, duration_s: float, seed: int,
-             split: str = "dev") -> list[AgentTaskSpec]:
+             split: str) -> list[AgentTaskSpec]:
     """Open-loop agent-task arrivals over ``[0, duration_s)``.
 
     ``split`` is ``dev`` (development: tuning) or ``eval`` (evaluation). The
