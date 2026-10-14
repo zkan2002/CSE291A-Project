@@ -270,7 +270,9 @@ def _task_metrics(tasks: list[dict], slos: dict | None, span_s: float) -> Metric
 
 
 def _queueing(requests: list[dict]) -> Metrics:
-    waits = sorted(r["admitted_s"] - r["arrived_s"] for r in requests)
+    # a model request never admitted (its agent task hit its hard timeout) queued until then
+    waits = sorted((r["completed_s"] if r["admitted_s"] is None else r["admitted_s"])
+                   - r["arrived_s"] for r in requests)
     return {"queueing_mean_s": _mean(waits), "queueing_p95_s": percentile(waits, 0.95)}
 
 

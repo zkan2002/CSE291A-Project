@@ -136,6 +136,22 @@ def test_tail_latency_queueing_time_and_failure_rate_by_cause(tmp_path, capsys):
     assert m["failure_rate.server_error"] == 0.0
 
 
+def test_a_model_request_that_timed_out_before_admission_queued_until_its_timeout(
+        tmp_path, capsys):
+    run_dir = tmp_path / "run"
+    write_run(run_dir, [task(0, arrived=0.0, completed=10.0),
+                        task(1, arrived=1.0, completed=9.0, failure="timeout")])
+    write_jsonl(run_dir / "requests.jsonl", [
+        request(0, 0, 0.0, 2.0, 10.0),
+        request(1, 0, 1.0, None, 9.0, error="timeout"),  # never admitted
+    ])
+
+    m = analyze(run_dir, capsys)
+
+    # waits 2 s and 8 s (arrival to the timeout)
+    assert m["queueing_mean_s"] == pytest.approx(5.0)
+
+
 MIB = 1024 * 1024
 
 
