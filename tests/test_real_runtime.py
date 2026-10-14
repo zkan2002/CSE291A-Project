@@ -113,6 +113,16 @@ def test_short_experiment_on_the_real_server_writes_a_run_directory(server_cfg, 
     assert sorted(u["task_id"] for u in unloaded) == sorted(t["task_id"] for t in tasks)
     assert all(u["failure"] is None and u["unloaded_completion_s"] > 0.5 for u in unloaded)
     assert (run_dir / "unloaded-server.log").stat().st_size > 0
+    # ... at the reference memory budget, not the experiment's (8192 tokens)
+    unloaded_log = (run_dir / "unloaded-server.log").read_text(errors="replace")
+    assert "n_ctx_slot = 32768" in unloaded_log
+    assert "n_ctx_slot = 8192" in (run_dir / "server.log").read_text(errors="replace")
+
+    # KV occupancy as the proxy admitted it (the server does not report its own)
+    kv = read_jsonl(run_dir / "kv.jsonl")
+    assert kv and all(k["runtime_kv_tokens"] is None for k in kv)
+    assert max(k["admitted_tokens"] for k in kv) > 0
+    assert kv[-1]["admitted_tokens"] == 0  # every agent task finished
 
     summary = summarize(run_dir).metrics
     assert summary["agent_tasks"] == len(tasks) and summary["throughput_tasks_per_min"] > 0
