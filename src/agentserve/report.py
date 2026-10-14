@@ -8,7 +8,8 @@ metric is reported as its mean across seeds with a 95% confidence interval
 (``agentserve.analysis``). ``REPORT_DIR`` gets:
 
 - ``runs.csv``: one row per run, every metric.
-- ``configurations.csv``: one row per configuration, ``<metric>_mean``, ``<metric>_ci95``, ``<metric>_n``.
+- ``configurations.csv``: one row per configuration, ``<metric>_mean``, ``<metric>_ci95``,
+  ``<metric>_n`` and ``<metric>_n_nan`` (seeds left out because their value was ``nan``).
 - ``classes.csv``: the same per configuration and task class.
 - ``metrics.md``: the headline metrics, overall and per task class, as ``mean ± ci95``,
   and cold start.
@@ -171,14 +172,15 @@ def _param_cols(c: Configuration) -> dict:
 
 
 def _estimate_headers(names: list[str]) -> list[str]:
-    return [f"{n}_{part}" for n in names for part in ("mean", "ci95", "n")]
+    return [f"{n}_{part}" for n in names for part in ("mean", "ci95", "n", "n_nan")]
 
 
 def _estimate_cols(estimates: dict[str, Estimate], names: list[str]) -> dict:
     cols = {}
     for n in names:
         e = estimates.get(n, Estimate(math.nan, math.nan, 0))
-        cols.update({f"{n}_mean": e.mean, f"{n}_ci95": e.ci95, f"{n}_n": e.n})
+        cols.update({f"{n}_mean": e.mean, f"{n}_ci95": e.ci95, f"{n}_n": e.n,
+                     f"{n}_n_nan": e.n_nan})
     return cols
 
 
@@ -198,7 +200,9 @@ def _markdown(configs: list[Configuration], runs: list[RunAnalysis]) -> str:
     lines = ["# Results", "",
              f"Mean ± 95% CI half-width across seeds (Student's t). Agent tasks arriving in "
              f"{' or '.join(windows)} (the measured window{'s' if len(windows) > 1 else ''}, "
-             f"run times in seconds) are measured.", "",
+             f"run times in seconds) are measured. An estimate marked (n of N seeds) "
+             f"leaves out the seeds that had no value for it (nan), for example no "
+             f"completed agent task to take a latency from.", "",
              "## Configurations", ""]
     for i, c in enumerate(configs, 1):
         lines.append(f"- **C{i}**: {_label(c.params)}; seeds {', '.join(map(str, c.seeds))}")
@@ -240,9 +244,13 @@ def _md_table(header: list[str], rows: list[list[str]]) -> list[str]:
 
 
 def _pm(e: Estimate | None) -> str:
+    """``mean ± ci95``, marked ``(n of N seeds)`` when some seeds had no value."""
     if e is None or math.isnan(e.mean):
         return "–"
-    return f"{e.mean:.3f}" if math.isnan(e.ci95) else f"{e.mean:.3f} ± {e.ci95:.3f}"
+    text = f"{e.mean:.3f}" if math.isnan(e.ci95) else f"{e.mean:.3f} ± {e.ci95:.3f}"
+    if e.n_nan:
+        text += f" ({e.n} of {e.n + e.n_nan} seeds)"
+    return text
 
 
 def _label(params: dict, keys=PARAMS) -> str:

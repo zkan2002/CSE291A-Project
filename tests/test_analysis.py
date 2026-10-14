@@ -426,6 +426,28 @@ def test_one_command_regenerates_every_table_and_plot_from_run_directories(tmp_p
     assert len(read_csv(out / "runs.csv")) == 4
 
 
+def test_seeds_without_a_value_are_counted_and_marked_not_silently_dropped(tmp_path):
+    sweep = tmp_path / "sweep"
+    # seed 3 completes no agent task, so it has no completion latency (nan)
+    for seed, completed in [(1, 2), (2, 4), (3, 0)]:
+        write_seed_run(sweep / f"seed{seed}", seed, completed)
+    out = tmp_path / "report"
+
+    main(["report", str(sweep), "--out", str(out)])
+
+    [config] = read_csv(out / "configurations.csv")
+    assert config["completion_latency_p50_s_n"] == "2"
+    assert config["completion_latency_p50_s_n_nan"] == "1"
+    assert config["throughput_tasks_per_min_n"] == "3"
+    assert config["throughput_tasks_per_min_n_nan"] == "0"
+    [huge] = [c for c in read_csv(out / "classes.csv") if c["task_class"] == "huge"]
+    assert huge["completion_latency_p50_s_n_nan"] == "3"  # its agent tasks always fail
+    table = (out / "metrics.md").read_text(encoding="utf-8")
+    # latency: 1.0 s in both seeds that have one, marked as over 2 of the 3 seeds
+    assert "1.000 ± 0.000 (2 of 3 seeds)" in table
+    assert "| 2.000 ± 4.968 |" in table  # throughput (2, 4 and 0 per minute): every seed
+
+
 def cold_start(role, startup_s, latencies):
     return {"role": role, "startup_s": startup_s,
             "first_requests": [{"n_prompt_tokens": 512, "n_predict": 32, "latency_s": s}

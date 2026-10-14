@@ -132,24 +132,27 @@ def _running_period(window: MetricWindow, measured: list[dict]):
 @dataclass(frozen=True)
 class Estimate:
     """Mean across seeds with the half-width of its two-sided 95% confidence interval
-    (Student's t, ``n - 1`` degrees of freedom). ``nan`` values are left out of ``n``;
-    ``ci95`` is ``nan`` with fewer than two values."""
+    (Student's t, ``n - 1`` degrees of freedom). Seeds whose value is ``nan`` are
+    left out of ``n`` and counted in ``n_nan``, so an estimate over fewer seeds
+    than the configuration has is visible; ``ci95`` is ``nan`` with fewer than
+    two values."""
 
     mean: float
     ci95: float
     n: int
+    n_nan: int = 0
 
     @classmethod
     def of(cls, values: list[float]) -> Estimate:
         xs = [float(v) for v in values if not math.isnan(v)]
-        n = len(xs)
+        n, n_nan = len(xs), len(values) - len(xs)
         if n == 0:
-            return cls(math.nan, math.nan, 0)
+            return cls(math.nan, math.nan, 0, n_nan)
         mean = sum(xs) / n
         if n == 1:
-            return cls(mean, math.nan, 1)
+            return cls(mean, math.nan, 1, n_nan)
         sd = math.sqrt(sum((x - mean) ** 2 for x in xs) / (n - 1))
-        return cls(mean, t_975(n - 1) * sd / math.sqrt(n), n)
+        return cls(mean, t_975(n - 1) * sd / math.sqrt(n), n, n_nan)
 
 
 # t(0.975, df) for df = 1..30
