@@ -22,9 +22,8 @@ import httpx
 
 from agentserve import unloaded
 from agentserve.clock import RealClock
-from agentserve.experiment import _unloaded
+from agentserve.experiment import _unloaded, admission_policy, resident_cache_policy
 from agentserve.llama_runtime import LlamaServerRuntime
-from agentserve.policy import build_policy
 from agentserve.proxy import Proxy
 from agentserve.recorder import SERVER_LOG_FILE, Recorder
 from agentserve.run_metadata import collect_run_metadata
@@ -66,7 +65,7 @@ def run_real_experiment(config: dict[str, Any], run_dir: Path, *,
 async def _run(config: dict[str, Any], server: ServerConfig, server_pid: int,
                tasks: list[AgentTaskSpec], recorder: Recorder, clock: RealClock,
                hard_timeouts: dict[int, float | None]) -> None:
-    runtime_cfg, policy_cfg = config["runtime"], config["policy"]
+    runtime_cfg = config["runtime"]
     timeout = httpx.Timeout(runtime_cfg.get("request_timeout_s", 600.0), connect=10.0)
     # no connection cap: the runtime's own queue, not the HTTP client, holds waiting requests
     limits = httpx.Limits(max_connections=None, max_keepalive_connections=None)
@@ -77,7 +76,7 @@ async def _run(config: dict[str, Any], server: ServerConfig, server_pid: int,
             recorder.system_sample, interval_s=runtime_cfg.get("sample_interval_s", 0.1))
         sampling = asyncio.create_task(sampler.run())
         try:
-            proxy = Proxy(policy=build_policy(policy_cfg["name"], concurrency=policy_cfg["concurrency"]),
+            proxy = Proxy(policy=admission_policy(config),
                           runtime=LlamaServerRuntime(server.base_url, client=client,
                                                      cache_prompt=server.cache_prompt),
                           clock=clock, recorder=recorder,
@@ -95,7 +94,8 @@ def _measure_unloaded(config: dict[str, Any], server: ServerConfig, tasks: list[
         timeout = config["runtime"].get("request_timeout_s", 600.0)
         return unloaded.measure(tasks, clock=RealClock(),
                                 runtime=_ClientPerRequest(server, timeout),
-                                memory_budget_tokens=server.memory_budget, n_slots=server.slots)
+                                memory_budget_tokens=server.memory_budget, n_slots=server.slots,
+                                pin_slots=resident_cache_policy(config))
     finally:
         stop_server(proc)
 

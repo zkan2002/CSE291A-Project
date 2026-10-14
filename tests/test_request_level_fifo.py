@@ -168,3 +168,48 @@ def test_an_agent_task_that_exceeds_its_hard_timeout_fails_with_cause_timeout(tm
     assert any(r["error"] == "timeout" and r["admitted_s"] is None for r in requests)
     # capacity a timed-out task held is given back: the N=1 bound still holds
     assert max_in_flight(requests) == 1
+
+
+def by_task(requests: list[dict]) -> dict[int, list[dict]]:
+    tasks: dict[int, list[dict]] = {}
+    for r in sorted(requests, key=lambda r: (r["task_id"], r["step"])):
+        tasks.setdefault(r["task_id"], []).append(r)
+    return tasks
+
+
+def context_survived(requests: list[dict], prev: dict, cur: dict) -> bool:
+    """No other model request used ``prev``'s slot between ``prev`` and ``cur``."""
+    return cur["slot"] == prev["slot"] and not any(
+        r["slot"] == prev["slot"] and prev["completed_s"] < r["completed_s"]
+        and r["admitted_s"] < cur["admitted_s"] and r is not cur
+        for r in requests)
+
+
+def cached_tokens(run_dir: Path) -> int:
+    return sum(r["n_cached_tokens"] or 0 for r in read_jsonl(run_dir / "requests.jsonl"))
+
+
+@pytest.mark.parametrize("policy", ["task_level_fifo", "request_level_fifo"])
+def test_with_pinning_a_next_step_reuses_the_retained_context_that_survived_its_tool_delay(
+        tmp_path, policy):
+    # 8 slots hold retained context for agent tasks in their tool delays, with
+    # at most N=4 model requests (or agent tasks) admitted at once.
+    common = dict(policy=policy, arrival_rate=1.0, concurrency=4, n_slots=8)
+    pinned = run(tmp_path, "pinned", policy_extra="pin_slots = true", **common)
+    unpinned = run(tmp_path, "unpinned", policy_extra="pin_slots = false", **common)
+
+    requests = read_jsonl(pinned / "requests.jsonl")
+    assert all(r["error"] is None for r in requests)
+    reused = 0
+    for steps in by_task(requests).values():
+        for prev, cur in zip(steps, steps[1:]):
+            # pinned: the next step goes back to its slot whenever that is free
+            if context_survived(requests, prev, cur):
+                assert cur["n_cached_tokens"] == prev["n_prompt_tokens"] + 50 - 1
+                reused += 1
+    later_steps = sum(len(s) - 1 for s in by_task(requests).values())
+    assert reused >= 0.9 * later_steps
+    if policy == "request_level_fifo":
+        # unpinned, a new agent task's request lands on whichever slot is least
+        # recently used, often one holding another task's retained context
+        assert cached_tokens(pinned) > cached_tokens(unpinned)

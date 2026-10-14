@@ -439,6 +439,7 @@ tool_delay_sigma = 0.5
 [policy]
 name = "task_level_fifo"
 concurrency = 2
+{pin_slots}
 
 [runtime]
 kind = "simulated"
@@ -451,10 +452,14 @@ cache_idle_slots = {cache_idle_slots}
 """
 
 
-def cached_tokens_of_later_steps(tmp_path, *, cache_idle_slots: bool) -> list[int]:
-    config = tmp_path / f"config-{cache_idle_slots}.toml"
-    config.write_text(EXPERIMENT.format(cache_idle_slots=str(cache_idle_slots).lower()))
-    run_dir = tmp_path / f"run-{cache_idle_slots}"
+def cached_tokens_of_later_steps(tmp_path, *, cache_idle_slots: bool,
+                                 pin_slots: bool | None = None) -> list[int]:
+    name = f"{cache_idle_slots}-{pin_slots}"
+    config = tmp_path / f"config-{name}.toml"
+    config.write_text(EXPERIMENT.format(
+        cache_idle_slots=str(cache_idle_slots).lower(),
+        pin_slots="" if pin_slots is None else f"pin_slots = {str(pin_slots).lower()}"))
+    run_dir = tmp_path / f"run-{name}"
     assert main(["run", str(config), "--out", str(run_dir)]) == 0
     requests = [json.loads(line) for line in (run_dir / "requests.jsonl").read_text().splitlines()]
     assert requests and all(r["error"] is None for r in requests)
@@ -462,9 +467,20 @@ def cached_tokens_of_later_steps(tmp_path, *, cache_idle_slots: bool) -> list[in
 
 
 def test_an_experiment_configures_the_cache_policy_of_the_simulated_runtime(tmp_path):
-    # task-level FIFO pins each agent task to a slot with id_slot
+    # pinned with id_slot, an agent step loses its retained context to the
+    # idle-slot offload (pilot amendment 6); resident keeps it in the pool
+    resident = cached_tokens_of_later_steps(tmp_path, cache_idle_slots=False, pin_slots=True)
+    offload_pinned = cached_tokens_of_later_steps(tmp_path, cache_idle_slots=True, pin_slots=True)
+
+    assert all(n > 0 for n in resident)
+    assert any(n == 0 for n in offload_pinned)
+
+
+def test_agent_tasks_are_pinned_under_the_resident_cache_policy_and_not_under_offload(tmp_path):
+    # by default pinning follows the cache policy, so both get their retained
+    # context back: resident from its pinned slot, offload from host RAM
     resident = cached_tokens_of_later_steps(tmp_path, cache_idle_slots=False)
     offload = cached_tokens_of_later_steps(tmp_path, cache_idle_slots=True)
 
     assert all(n > 0 for n in resident)
-    assert any(n == 0 for n in offload)
+    assert all(n > 0 for n in offload)

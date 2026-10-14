@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from agentserve.clock import Clock, VirtualClock
-from agentserve.policy import build_policy
+from agentserve.policy import AdmissionPolicy, build_policy
 from agentserve.proxy import Proxy
 from agentserve.recorder import Recorder
 from agentserve.simulated import SimulatedRuntime
@@ -30,9 +30,26 @@ def simulated_runtime(clock: Clock, runtime_cfg: dict[str, Any]) -> SimulatedRun
                             cache_idle_slots=runtime_cfg.get("cache_idle_slots", False))
 
 
+def resident_cache_policy(config: dict[str, Any]) -> bool:
+    """Whether the run's cache policy is *resident* (``--no-cache-idle-slots``,
+    retained context stays in the KV pool) rather than *offload*
+    (``--cache-idle-slots``). The flag is under [server] for a real run, under
+    [runtime] for a simulated one."""
+    return not config.get("server", config["runtime"]).get("cache_idle_slots", False)
+
+
+def admission_policy(config: dict[str, Any]) -> AdmissionPolicy:
+    """The [policy] table's admission policy. Agent tasks are pinned to slots
+    (``id_slot``) under the resident cache policy and not under offload (pilot
+    amendment 6), unless ``pin_slots`` says otherwise."""
+    policy_cfg = config["policy"]
+    return build_policy(policy_cfg["name"], concurrency=policy_cfg["concurrency"],
+                        pin_slots=policy_cfg.get("pin_slots", resident_cache_policy(config)))
+
+
 def run_experiment(config: dict[str, Any], run_dir: Path, *,
                    unloaded_cache_dir: Path | None = None) -> None:
-    run, runtime_cfg, policy_cfg = config["run"], config["runtime"], config["policy"]
+    run, runtime_cfg = config["run"], config["runtime"]
     if runtime_cfg["kind"] == "llama_server":
         from agentserve.real_experiment import run_real_experiment
         return run_real_experiment(config, run_dir, unloaded_cache_dir=unloaded_cache_dir)
@@ -49,7 +66,7 @@ def run_experiment(config: dict[str, Any], run_dir: Path, *,
         # Unloaded completion times, task SLOs and hard timeouts (by task_id).
         targets = {r.task_id: r for r in _unloaded(config, tasks, unloaded_cache_dir)}
         recorder.unloaded(targets.values())
-        proxy = Proxy(policy=build_policy(policy_cfg["name"], concurrency=policy_cfg["concurrency"]),
+        proxy = Proxy(policy=admission_policy(config),
                       runtime=runtime, clock=clock, recorder=recorder,
                       memory_budget_tokens=runtime_cfg["memory_budget_tokens"],
                       n_slots=runtime_cfg["n_slots"],
@@ -75,6 +92,7 @@ def _unloaded(config: dict[str, Any], tasks, cache_dir: Path | None,
         runtime = simulated_runtime(clock, runtime_cfg)
         return unloaded.measure(tasks, clock=clock, runtime=runtime,
                                 memory_budget_tokens=runtime_cfg["memory_budget_tokens"],
-                                n_slots=runtime_cfg["n_slots"])
+                                n_slots=runtime_cfg["n_slots"],
+                                pin_slots=resident_cache_policy(config))
 
     return unloaded.cached(key, cache_dir, measure_real or measure)

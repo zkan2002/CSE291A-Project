@@ -57,13 +57,16 @@ class UnloadedRecord:
 
 
 def measure(tasks: list[AgentTaskSpec], *, clock: Clock, runtime: Runtime,
-            memory_budget_tokens: int, n_slots: int) -> list[UnloadedRecord]:
-    """Run each agent task alone on ``runtime``, in task-ID order, on ``clock``."""
+            memory_budget_tokens: int, n_slots: int,
+            pin_slots: bool = True) -> list[UnloadedRecord]:
+    """Run each agent task alone on ``runtime``, in task-ID order, on ``clock``,
+    pinned to a slot or not as the cache policy has it (``pin_slots``)."""
     sink = _TaskSink()
 
     async def main() -> None:
         for spec in sorted(tasks, key=lambda t: t.task_id):
-            proxy = Proxy(policy=TaskLevelFifo(concurrency=1), runtime=runtime, clock=clock,
+            proxy = Proxy(policy=TaskLevelFifo(concurrency=1, pin_slots=pin_slots),
+                          runtime=runtime, clock=clock,
                           recorder=sink, memory_budget_tokens=memory_budget_tokens,
                           n_slots=n_slots)
             await proxy.run([replace(spec, arrival_s=clock.now())])

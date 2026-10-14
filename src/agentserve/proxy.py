@@ -156,7 +156,7 @@ class Proxy:
             self._waiting.remove(waiting)
             p = waiting.pending
             self._active[p.ref] = ActiveRequest(p.ref, admission.slot, p.n_prompt_tokens, p.n_predict)
-            self._admitted_tasks.setdefault(p.ref.task_id, admission.slot)
+            self._admitted_tasks[p.ref.task_id] = admission.slot
             waiting.admitted.set_result(admission.slot)
 
     def _record_request(self, ref: RequestRef, arrived: float, admitted: float | None,
