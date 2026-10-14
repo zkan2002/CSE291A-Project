@@ -44,17 +44,20 @@ concurrency = {concurrency}
 kind = "simulated"
 n_slots = {n_slots}
 memory_budget_tokens = {memory_budget}
-prompt_token_s = 0.0002
+prompt_token_s = {prompt_token_s}
 output_token_s = 0.01
+{runtime_extra}
 """
 
 
 def write_config(tmp_path: Path, *, seed=1, duration_s=60, arrival_rate=0.5,
-                 concurrency=4, n_slots=4, memory_budget=32768, name="config") -> Path:
+                 concurrency=4, n_slots=4, memory_budget=32768, prompt_token_s=0.0002,
+                 runtime_extra="", name="config") -> Path:
     path = tmp_path / f"{name}.toml"
     path.write_text(CONFIG.format(seed=seed, duration_s=duration_s, arrival_rate=arrival_rate,
                                   concurrency=concurrency, n_slots=n_slots,
-                                  memory_budget=memory_budget))
+                                  memory_budget=memory_budget, prompt_token_s=prompt_token_s,
+                                  runtime_extra=runtime_extra))
     return path
 
 
@@ -84,18 +87,59 @@ def test_every_agent_task_has_its_unloaded_completion_time_slo_and_timeout_recor
             assert u["unloaded_completion_s"] > 0.45 + 1.5
 
 
-def test_unloaded_completion_times_are_cached_per_workload_and_runtime_config(tmp_path):
+CACHING_OFF = "cache_prompt = false"
+OFFLOAD = "cache_ram_tokens = 50000\ncache_idle_slots = true"
+
+
+def test_task_slos_do_not_depend_on_the_cache_policy_or_memory_budget(tmp_path):
+    # caching off makes every agent step recompute its whole prompt, and a small
+    # budget makes multi-step agent tasks lose retained context: neither may move
+    # the task SLOs the configurations are compared against
+    runs = {
+        "resident": write_config(tmp_path, name="resident"),
+        "off": write_config(tmp_path, runtime_extra=CACHING_OFF, name="off"),
+        "offload": write_config(tmp_path, runtime_extra=OFFLOAD, name="offload"),
+        "small": write_config(tmp_path, memory_budget=2048, name="small"),
+    }
+    for name, config in runs.items():
+        main(["run", str(config), "--out", str(tmp_path / name)])
+
+    reference = (tmp_path / "resident" / "unloaded.jsonl").read_bytes()
+    for name in ("off", "offload", "small"):
+        assert (tmp_path / name / "unloaded.jsonl").read_bytes() == reference, name
+    # measured at the reference budget, where every agent task fits on its own
+    assert all(u["failure"] is None for u in read_jsonl(tmp_path / "small" / "unloaded.jsonl"))
+
+
+def test_the_reference_memory_budget_is_configurable(tmp_path):
+    config = write_config(tmp_path, name="tiny-reference")
+    config.write_text(config.read_text().replace(
+        "[run]\n", "[run]\nreference_memory_budget = 600\n"))
+
+    main(["run", str(config), "--out", str(tmp_path / "run")])
+
+    # the three-step class needs more than 600 tokens: it fails even when run alone
+    unloaded = read_jsonl(tmp_path / "run" / "unloaded.jsonl")
+    assert {u["failure"] for u in unloaded if u["task_class"] == "three-step"} == {
+        "exceeds_context"}
+    assert {u["failure"] for u in unloaded if u["task_class"] == "one-step"} == {None}
+
+
+def test_unloaded_completion_times_are_cached_per_workload_and_runtime_speed(tmp_path):
     cache = tmp_path / "cache"
     runs = {
         "n2": write_config(tmp_path, concurrency=2, name="n2"),
         "n4": write_config(tmp_path, concurrency=4, name="n4"),         # policy differs
-        "small": write_config(tmp_path, memory_budget=8192, name="small"),  # runtime differs
+        "small": write_config(tmp_path, memory_budget=8192, name="small"),  # budget differs
+        "off": write_config(tmp_path, runtime_extra=CACHING_OFF, name="off"),  # cache policy
+        "slow": write_config(tmp_path, prompt_token_s=0.0004, name="slow"),  # runtime speed
     }
     for name, config in runs.items():
         main(["run", str(config), "--out", str(tmp_path / name),
               "--unloaded-cache", str(cache)])
 
-    # the admission policy does not change the measurement; the runtime config does
+    # neither the admission policy, the budget nor the cache policy changes the
+    # measurement (it is taken on the reference runtime config); the runtime's speed does
     assert len(list(cache.iterdir())) == 2
     assert ((tmp_path / "n2" / "unloaded.jsonl").read_bytes()
             == (tmp_path / "n4" / "unloaded.jsonl").read_bytes())

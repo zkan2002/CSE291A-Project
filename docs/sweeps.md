@@ -51,7 +51,7 @@ A grid that leaves an axis out keeps the base config's value.
 | `runs/<cell>.partial/`, `runs/<cell>.<k>.partial/` | A cell in progress, or an attempt that failed or was interrupted (kept for inspection, retried on the next invocation). `report` ignores them. |
 | `sweep.json` | The sweep config and its list of cells, as last invoked. |
 | `sweep.jsonl` | One line per attempt at a cell: `cell`, `status` (`complete`, `skipped`, `failed`, `interrupted`), `at`, `wall_s`, `error`, and `fresh_servers` for real cells. |
-| `unloaded-cache/` | Unloaded completion times per agent task, shared by every cell with the same runtime config (see `--unloaded-cache`). |
+| `unloaded-cache/` | Unloaded completion times per agent task, measured on the reference runtime config, so shared by every cell whatever its policy, cache policy and budget (see `unloaded.jsonl` and `--unloaded-cache`). |
 
 A failed cell (for example a server that won't start) is recorded and the sweep
 moves on; the command then exits with status 1. Resuming with a sweep config

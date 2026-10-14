@@ -114,7 +114,16 @@ An agent task is *active* from `step_admitted_s[0]` to `completed_s` (never, if 
 
 ## `unloaded.jsonl`
 
-Before the experiment, every agent task of the workload is run alone on an otherwise idle runtime (a fresh one, on its own clock), one after another, through the same proxy and runtime interface, under task-level admission with N=1 (pinned or not as the cache policy has it, without `pin_slots`'s override). The measurement does not depend on the run's admission policy, so every policy is judged against the same task SLOs.
+Before the experiment, every agent task of the workload is run alone on an otherwise idle runtime (a fresh one, on its own clock), one after another, through the same proxy and runtime interface, under task-level admission with N=1, pinned.
+
+**Reference runtime config.** The unloaded measurement never runs on the run's own memory budget or cache policy, but on one *reference* config shared by every configuration: the run's runtime (same model, server binary and speed) at the **reference memory budget**, under the **resident** cache policy with caching on (`cache_idle_slots = false`, `cache_prompt = true`) and no host-RAM prompt cache. The reference budget is set with
+
+```toml
+[run]
+reference_memory_budget = 32768  # tokens; the default, which every agent task of the default mix fits
+```
+
+So the task SLOs and hard timeouts do not depend on the admission policy, the cache policy or the memory budget: every configuration of a sweep is judged against the same targets, and a configuration with caching off or a small budget shows up as lost goodput, not as looser SLOs. An agent task that does not fit the run's own budget still gets a task SLO (and fails in the experiment); only one that does not fit the reference budget has none. In a real run the unloaded server is launched from the reference config (its `-c` is the reference budget), not the experiment's.
 
 | Field | Meaning |
 | --- | --- |
@@ -124,7 +133,7 @@ Before the experiment, every agent task of the workload is run alone on an other
 | `hard_timeout_s` | Hard timeout: 10 x `unloaded_completion_s` (`null` if that is `null`). |
 | `failure` | `null`, or the error that failed the agent task when run alone. |
 
-`agentserve run ... --unloaded-cache DIR` caches the measurement in `DIR` **per agent task**: keyed by the agent task's content (its prompts, outputs lengths and tool delays, not its ID or arrival time) and the runtime config, without the slot count, port or admission policy. A later run reuses the measurements of every agent task it shares, and measures only the rest: the same seed at a higher arrival rate draws the same agent tasks first, and running alone, an agent task's time does not depend on N or the slot count. Without the flag, it is measured afresh for every run.
+`agentserve run ... --unloaded-cache DIR` caches the measurement in `DIR` **per agent task**: keyed by the agent task's content (its prompts, outputs lengths and tool delays, not its ID or arrival time) and the reference runtime config, without the slot count or port (the admission policy, cache policy and memory budget are not part of it at all). A later run reuses the measurements of every agent task it shares, and measures only the rest: the same seed at a higher arrival rate draws the same agent tasks first, and running alone, an agent task's time does not depend on N or the slot count. Without the flag, it is measured afresh for every run.
 
 ## `cold_start.json` (real runs)
 

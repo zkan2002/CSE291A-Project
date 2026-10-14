@@ -18,6 +18,7 @@ Cache policies (pilot amendment 6):
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 CACHE_POLICIES = ("resident", "offload", "off")
@@ -26,6 +27,9 @@ DEFAULT_SPLIT = "dev"
 DEFAULT_RECORD_PROMPTS = False
 DEFAULT_REQUEST_TIMEOUT_S = 600.0
 DEFAULT_SAMPLE_INTERVAL_S = 0.1
+DEFAULT_REFERENCE_MEMORY_BUDGET = 32768
+"""Memory budget (tokens) at which unloaded completion times are measured: every
+agent task of the default mix fits it on its own."""
 
 Config = dict[str, Any]
 
@@ -127,3 +131,22 @@ def request_timeout_s(config: Config) -> float:
 def sample_interval_s(config: Config) -> float:
     """Seconds between system samples on a real run."""
     return config["runtime"].get("sample_interval_s", DEFAULT_SAMPLE_INTERVAL_S)
+
+
+def reference_memory_budget(config: Config) -> int:
+    """``[run] reference_memory_budget``: the memory budget (tokens) unloaded
+    completion times are measured at."""
+    return config["run"].get("reference_memory_budget", DEFAULT_REFERENCE_MEMORY_BUDGET)
+
+
+def unloaded_reference(config: Config) -> Config:
+    """The config unloaded completion times are measured on: the run's runtime at
+    the reference memory budget, under the resident cache policy (caching on,
+    agent tasks pinned) and without a host-RAM prompt cache. It is the same
+    whatever the run's admission policy, cache policy and memory budget, so every
+    configuration is judged against the same task SLOs and hard timeouts."""
+    reference = copy.deepcopy(config)
+    set_memory_budget_tokens(reference, reference_memory_budget(config))
+    set_cache_policy(reference, "resident")
+    reference[_keys(reference)["table"]][_keys(reference)["ram"]] = 0
+    return reference

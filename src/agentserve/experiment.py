@@ -76,21 +76,26 @@ def run_experiment(config: dict[str, Any], run_dir: Path, *,
 
 def _unloaded(config: dict[str, Any], tasks, cache_dir: Path | None,
               measure_real=None) -> list[unloaded.UnloadedRecord]:
-    """Each agent task run alone on a fresh, idle runtime with its own clock.
-    Cached per agent task and runtime config (``unloaded.cached``): neither the
-    admission policy, the arrival process nor the slot count is part of the key.
-    A real run passes ``measure_real(tasks)``, which measures on a fresh llama-server."""
-    runtime_cfg = config["runtime"]
-    key = {"runtime": {k: v for k, v in runtime_cfg.items() if k != "n_slots"}}
-    if "server" in config:  # real runs: the server launch config is part of the runtime
-        key["server"] = {k: v for k, v in config["server"].items()
+    """Each agent task run alone on a fresh, idle runtime with its own clock, on
+    the reference runtime config (``config.unloaded_reference``): the same for
+    every admission policy, cache policy and memory budget. Cached per agent task
+    and reference config (``unloaded.cached``); the slot count is not part of the
+    key. A real run passes ``measure_real(reference, tasks)``, which measures on a
+    fresh llama-server launched from the reference config."""
+    reference = cfg.unloaded_reference(config)
+    key = {"runtime": {k: v for k, v in reference["runtime"].items()
+                       if k not in ("n_slots", "sample_interval_s")}}
+    if "server" in reference:  # real runs: the server launch config is part of the runtime
+        key["server"] = {k: v for k, v in reference["server"].items()
                          if k not in ("host", "port", "slots")}
 
     def measure(subset) -> list[unloaded.UnloadedRecord]:
+        if measure_real is not None:
+            return measure_real(reference, subset)
         clock = VirtualClock()
-        runtime = simulated_runtime(clock, runtime_cfg)
+        runtime = simulated_runtime(clock, reference["runtime"])
         return unloaded.measure(subset, clock=clock, runtime=runtime,
-                                memory_budget_tokens=cfg.memory_budget_tokens(config),
-                                n_slots=cfg.slots(config), pin_slots=cfg.cache_policy_pins(config))
+                                memory_budget_tokens=cfg.memory_budget_tokens(reference),
+                                n_slots=cfg.slots(reference), pin_slots=True)
 
-    return unloaded.cached(key, cache_dir, tasks, measure_real or measure)
+    return unloaded.cached(key, cache_dir, tasks, measure)

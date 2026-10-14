@@ -66,8 +66,8 @@ def run_real_experiment(config: dict[str, Any], run_dir: Path, *,
         stop_server(launches.start("cold_start", run_dir / COLD_START_SERVER_LOG_FILE,
                                    probes=COLD_START_PROBES))
         targets = _unloaded(config, tasks, unloaded_cache_dir,
-                            measure_real=lambda subset: _measure_unloaded(
-                                config, server, subset, run_dir, launches))
+                            measure_real=lambda reference, subset: _measure_unloaded(
+                                reference, subset, run_dir, launches))
         recorder.unloaded(targets)
         proc = launches.start("experiment", run_dir / SERVER_LOG_FILE, probes=0)
         try:
@@ -118,15 +118,18 @@ class _Launches:
     def last_startup_s(self) -> float:
         return self._launches[-1]["startup_s"]
 
-    def start(self, role: str, log_path: Path, *, probes: int):
+    def start(self, role: str, log_path: Path, *, probes: int,
+              server: ServerConfig | None = None):
+        """Launch ``server`` (default: the run's own) and probe it ``probes`` times."""
+        server = server or self._server
         launched = time.perf_counter()
-        proc = start_server(self._server, log_path=log_path)
+        proc = start_server(server, log_path=log_path)
         launch = {"role": role, "pid": proc.pid,
                   "startup_s": round(time.perf_counter() - launched, 3), "first_requests": []}
         self._launches.append(launch)
         try:
             for i in range(probes):
-                launch["first_requests"].append(_probe(self._server, salt=1_000_003 + i))
+                launch["first_requests"].append(_probe(server, salt=1_000_003 + i))
         except BaseException:
             stop_server(proc)
             raise
@@ -151,14 +154,18 @@ def _probe(server: ServerConfig, salt: int) -> dict[str, Any]:
             "prompt_s": result.prompt_ms / 1000.0, "decode_s": result.predicted_ms / 1000.0}
 
 
-def _measure_unloaded(config: dict[str, Any], server: ServerConfig, tasks: list[AgentTaskSpec],
-                      run_dir: Path, launches: _Launches) -> list[unloaded.UnloadedRecord]:
-    proc = launches.start("unloaded", run_dir / UNLOADED_SERVER_LOG_FILE, probes=COLD_START_PROBES)
+def _measure_unloaded(reference: dict[str, Any], tasks: list[AgentTaskSpec], run_dir: Path,
+                      launches: _Launches) -> list[unloaded.UnloadedRecord]:
+    """Unloaded completion times on a fresh server launched from the reference
+    config (``config.unloaded_reference``), not the run's own."""
+    server = ServerConfig(**reference["server"])
+    proc = launches.start("unloaded", run_dir / UNLOADED_SERVER_LOG_FILE,
+                          probes=COLD_START_PROBES, server=server)
     try:
         return unloaded.measure(tasks, clock=RealClock(),
-                                runtime=_ClientPerRequest(server, cfg.request_timeout_s(config)),
+                                runtime=_ClientPerRequest(server, cfg.request_timeout_s(reference)),
                                 memory_budget_tokens=server.memory_budget, n_slots=server.slots,
-                                pin_slots=cfg.cache_policy_pins(config))
+                                pin_slots=True)
     finally:
         stop_server(proc)
 

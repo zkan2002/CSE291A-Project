@@ -3,9 +3,11 @@
 Each agent task's unloaded completion time is measured by running it alone on
 an otherwise idle runtime, through the same proxy and runtime interface as the
 experiment itself, so it works for any runtime and clock. Agent tasks are run
-one after another, never overlapping, under task-level admission with N=1; the
-measurement is therefore independent of the experiment's admission policy, and
-every policy is judged against the same task SLOs.
+one after another, never overlapping, under task-level admission with N=1, on
+the reference runtime config (``agentserve.config.unloaded_reference``); the
+measurement is therefore independent of the experiment's admission policy,
+cache policy and memory budget, and every configuration is judged against the
+same task SLOs.
 
 - task SLO = ``SLO_MULTIPLE`` x unloaded completion time
 - hard timeout = ``HARD_TIMEOUT_MULTIPLE`` x unloaded completion time

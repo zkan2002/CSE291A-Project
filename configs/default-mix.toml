@@ -9,6 +9,7 @@ split = "dev"             # "dev" for tuning, "eval" for evaluation: the two nev
 warmup_s = 0              # arrivals in [0, warmup_s) run but are not measured (run protocol: 60)
 duration_s = 600          # arrivals are released over [0, duration_s); the run then drains
 record_prompts = false    # true also writes prompts.jsonl (every prompt's token array; large)
+# reference_memory_budget = 32768  # budget unloaded completion times (task SLOs) are measured at
 
 [workload]
 mix = "default"           # 8 classes; or list [[workload.classes]] instead
