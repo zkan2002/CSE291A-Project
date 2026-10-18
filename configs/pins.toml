@@ -1,4 +1,4 @@
-# Pinned environment for every experiment (spec #1, ADR-0002). See docs/environment.md.
+# Pinned environment for every experiment (spec #1, ADR-0003). See docs/environment.md.
 
 [llama_cpp]
 release_tag = "b11606"
@@ -30,7 +30,18 @@ size_bytes = 2019377696
 sha256 = "6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff"
 kv_cache_type = "f16"
 
-[machine]
+[machine.runpod]           # the sweep machine (ADR-0003); every compared experiment runs here
+pod = "Secure Cloud, EU-RO-1, 1x GPU, ~5 vCPU (cgroup quota)"
+gpu = "NVIDIA RTX 2000 Ada Generation (16380 MiB, compute capability 8.9)"
+nvidia_driver = "580.159.04"
+cuda_driver_api = "13.0"   # host CUDA version reported by RunPod
+cuda_runtime = "12.4"      # nvcc 12.4.131 from the image, used to build llama-server
+image = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
+compiler = "GNU 11.4.0"
+python = "3.11.10"
+uv = "0.13.0"
+
+[machine]                  # the desktop (development; ADR-0002, superseded)
 gpu = "NVIDIA GeForce RTX 3060 Ti (8192 MiB)"
 nvidia_driver = "617.14"
 cuda_driver_api = "13.4"   # "CUDA UMD Version" reported by nvidia-smi
