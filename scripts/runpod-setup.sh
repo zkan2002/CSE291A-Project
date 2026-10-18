@@ -16,6 +16,20 @@ UV_VERSION="0.13.0"
 step() { printf '\n== %s\n' "$*"; }
 die() { echo "error: $*" >&2; exit 1; }
 
+# SSH sessions do not inherit the image's PATH, which is where nvcc lives
+export PATH="/usr/local/cuda/bin:$PATH"
+
+build_jobs() {  # the pod's CPU quota (cgroup v2 or v1); nproc reports the whole host
+    local quota period
+    if read -r quota period 2>/dev/null < /sys/fs/cgroup/cpu.max && [ "$quota" != max ]; then :
+    elif quota="$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us 2>/dev/null)" && [ "${quota:--1}" -gt 0 ]; then
+        period="$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us)"
+    else
+        nproc; return
+    fi
+    echo $(( quota / period > 0 ? quota / period : 1 ))
+}
+
 step "System packages"
 SUDO=""
 [ "$(id -u)" -ne 0 ] && SUDO=sudo
@@ -59,7 +73,7 @@ else
     git -C "$SRC" checkout -q --detach "$COMMIT"
     read -r -a FLAGS <<< "$(pin llama_cpp.linux.cmake_flags)"
     cmake -S "$SRC" -B "$SRC/build" "${FLAGS[@]}"
-    cmake --build "$SRC/build" --target llama-server -j "$(nproc)"
+    cmake --build "$SRC/build" --target llama-server -j "$(build_jobs)"
     mkdir -p "$BIN_DIR"
     cp "$SRC/build/bin/llama-server" "$BIN_DIR/"
 fi
