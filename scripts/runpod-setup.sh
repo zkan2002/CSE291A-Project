@@ -72,7 +72,9 @@ else
     git -C "$SRC" cat-file -e "$COMMIT^{commit}" 2>/dev/null || git -C "$SRC" fetch -q origin
     git -C "$SRC" checkout -q --detach "$COMMIT"
     read -r -a FLAGS <<< "$(pin llama_cpp.linux.cmake_flags)"
-    cmake -S "$SRC" -B "$SRC/build" "${FLAGS[@]}"
+    ARCH="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -n 1 | tr -d .)"
+    rm -rf "$SRC/build"  # a failed configure leaves a cache that would be reused
+    cmake -S "$SRC" -B "$SRC/build" "${FLAGS[@]}" "-DCMAKE_CUDA_ARCHITECTURES=$ARCH"
     cmake --build "$SRC/build" --target llama-server -j "$(build_jobs)"
     mkdir -p "$BIN_DIR"
     cp "$SRC/build/bin/llama-server" "$BIN_DIR/"

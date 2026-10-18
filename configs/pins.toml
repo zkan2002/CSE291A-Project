@@ -13,12 +13,12 @@ source_reading_commit = "ff026f8c0a97fe80649f34763432c9d40b418622"
 
 [llama_cpp.linux]
 # Linux (RunPod) has no pinned prebuilt: scripts/runpod-setup.sh builds `commit` from source,
-# from a blobless clone so `llama-server --version` still reports build 11606.
+# from a blobless clone so `llama-server --version` still reports build 11606. The script adds
+# -DCMAKE_CUDA_ARCHITECTURES=<the GPU's compute capability> (the image's CMake 3.22 predates "native").
 cmake_flags = [
     "-DGGML_CUDA=ON",
     "-DBUILD_SHARED_LIBS=OFF",
     "-DCMAKE_BUILD_TYPE=Release",
-    "-DCMAKE_CUDA_ARCHITECTURES=native",
 ]
 
 [model]
