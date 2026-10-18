@@ -1,8 +1,8 @@
 # Pilot server (ticket #2): a deliberately small shared KV pool with several slots.
 # Large artifacts live outside the repo; docs/environment.md says how to fetch them.
 [server]
-binary = "C:/CSE291A/artifacts/llama.cpp/b11606/llama-server.exe"
-model = "C:/CSE291A/artifacts/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+binary = "${AGENTSERVE_ARTIFACTS}/llama.cpp/b11606/llama-server"
+model = "${AGENTSERVE_ARTIFACTS}/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
 host = "127.0.0.1"
 port = 8091
 memory_budget = 2048   # KV-pool token capacity (-c, with --kv-unified)

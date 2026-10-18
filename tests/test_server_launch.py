@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from agentserve.server import ServerConfig, launch_args, load_server_config
+from agentserve.server import ServerConfig, launch_args, load_server_config, resolve_artifact_path
 
 PILOT_TOML = """
 [server]
@@ -71,3 +71,41 @@ def test_overrides_replace_config_values(tmp_path):
     args = launch_args(cfg)
     assert _flag_value(args, "-c") == "4096"
     assert _flag_value(args, "-np") == "2"
+
+
+# --- artifact paths: one config works on the Windows desktop and on a Linux pod ---
+
+TEMPLATE_TOML = """
+[server]
+binary = "${AGENTSERVE_ARTIFACTS}/llama.cpp/b11606/llama-server"
+model = "${AGENTSERVE_ARTIFACTS}/models/model.gguf"
+memory_budget = 2048
+slots = 4
+"""
+
+
+def test_artifacts_variable_expands_from_the_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTSERVE_ARTIFACTS", "/workspace/artifacts")
+    cfg = load_server_config(_write(tmp_path, TEMPLATE_TOML))
+    assert cfg.model == "/workspace/artifacts/models/model.gguf"
+    assert launch_args(cfg)[0].startswith("/workspace/artifacts/llama.cpp/b11606/llama-server")
+
+
+def test_artifacts_variable_defaults_per_platform():
+    template = "${AGENTSERVE_ARTIFACTS}/m.gguf"
+    assert resolve_artifact_path(template, env={}, platform="linux") == "/workspace/artifacts/m.gguf"
+    assert resolve_artifact_path(template, env={}, platform="win32") == "C:/CSE291A/artifacts/m.gguf"
+
+
+def test_windows_binary_without_extension_resolves_to_the_exe(tmp_path):
+    (tmp_path / "llama-server.exe").write_bytes(b"")
+    bare = str(tmp_path / "llama-server")
+    assert resolve_artifact_path(bare, env={}, platform="win32") == bare + ".exe"
+    # on Linux the name is used as written
+    assert resolve_artifact_path(bare, env={}, platform="linux") == bare
+
+
+def test_plain_paths_are_unchanged():
+    assert resolve_artifact_path("C:/artifacts/x.exe", env={}, platform="win32") == "C:/artifacts/x.exe"
+    assert resolve_artifact_path("/opt/m.gguf", env={"AGENTSERVE_ARTIFACTS": "/x"}, platform="linux") \
+        == "/opt/m.gguf"
