@@ -1,0 +1,56 @@
+# Arrival-rate calibration on the sweep GPU (dev workload, one seed): find where queueing and
+# memory pressure begin, to pick the Phase 1 sweep's arrival rates. A second grid deliberately
+# overflows the KV pool (large N on a small budget), so pool exhaustion and hard timeouts are
+# exercised on the real server.
+#   uv run agentserve sweep configs/calibrate-rates.toml --out /workspace/results/calibrate-rates
+#   uv run agentserve report /workspace/results/calibrate-rates --out /workspace/results/calibrate-rates/report
+# Its unloaded-cache/ is keyed per agent task on the reference config, so it can be copied into
+# a later dev sweep's directory to skip re-measuring the same seed's tasks.
+
+[sweep]
+seeds = [1]
+
+[[grid]]                  # the rate ladder
+policy = ["request_level_fifo"]
+concurrency = [4]
+memory_budget = [16384]
+arrival_rate = [0.05, 0.1, 0.2, 0.3, 0.45, 0.6]
+cache_policy = ["resident"]
+
+[[grid]]                  # past the overflow cliff
+policy = ["request_level_fifo"]
+concurrency = [16]
+memory_budget = [8192]
+arrival_rate = [0.3]
+cache_policy = ["resident"]
+
+[base.run]
+seed = 1
+split = "dev"
+warmup_s = 30             # arrivals in [0, 30) are the warm-up: run and logged, not measured
+duration_s = 150          # measured arrivals in [30, 150); then drain
+
+[base.workload]
+mix = "default"
+arrival_rate_per_s = 0.1
+
+[base.policy]
+name = "request_level_fifo"
+concurrency = 4
+
+[base.runtime]
+kind = "llama_server"
+request_timeout_s = 600
+sample_interval_s = 0.1
+
+[base.server]
+binary = "${AGENTSERVE_ARTIFACTS}/llama.cpp/b11606/llama-server"
+model = "${AGENTSERVE_ARTIFACTS}/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+host = "127.0.0.1"
+port = 8093
+memory_budget = 16384
+slots = 4                 # the sweep sets slots = N
+gpu_layers = 99
+cache_ram_mib = 8192      # the runtime default host-RAM prompt cache
+cache_idle_slots = false
+cache_prompt = true
