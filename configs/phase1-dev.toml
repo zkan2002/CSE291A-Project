@@ -13,14 +13,15 @@
 # runs, so each stage is added by uncommenting its grids and rerunning. If time runs
 # short, cut sweep runs (Stage B first, then rates), never seeds.
 #
-# Stage A1 (run first, 95 runs, ~22 h incl. unloaded measurement): tune N per baseline and
-#           budget at the middle rate (80), the overflow cliff (5) and caching off (10).
-# Stage A2 (after A1, 40 runs, ~9 h): both baselines at their best N across the other two
-#           rates. Fill in N from the A1 report (best mean goodput on these dev workloads).
+# Stage A1 (110 runs): tune N per baseline and budget at rate 0.1 (80, plus 15 extending N
+#           to 16 where 8 was best), the overflow cliff (5) and caching off (10).
+# Stage A2 (after A1, 40 runs, ~9 h): both baselines at their best N at rates 0.025 and 0.05;
+#           the grids are generated from the A1 report by agentserve.best_n.
 # Stage B  (only if A is done on schedule, ~90 runs, ~19 h): the offload cache policy and
 #           the 8k budget across rates.
-# Calibration (0.05 / 0.1 / 0.15 tasks/s): ~0.1 is where KV-pool failures begin at N = 4 and
-# 16k; above ~0.2 every configuration times out, so higher rates cannot separate policies.
+# Rates: calibration (configs/calibrate-rates.toml) put the onset of KV-pool failures near 0.1
+# at N = 4 and 16k, and A1 showed 0.1 already overloads every configuration, so the ladder is
+# 0.025 / 0.05 / 0.1; above ~0.2 every configuration times out.
 
 [sweep]
 seeds = [1, 2, 3, 4, 5]
@@ -51,37 +52,29 @@ memory_budget = [16384]
 arrival_rate = [0.1]
 cache_policy = ["off"]
 
+# A1.4 extend N: in A1.1 the best N was the largest tried (8) for three of the four
+# baseline/budget pairs, so the optimum may lie beyond it
+[[grid]]
+policy = ["request_level_fifo"]
+concurrency = [16]
+memory_budget = [16384, 32768]
+arrival_rate = [0.1]
+cache_policy = ["resident"]
+
+[[grid]]
+policy = ["task_level_fifo"]
+concurrency = [16]
+memory_budget = [32768]
+arrival_rate = [0.1]
+cache_policy = ["resident"]
+
 # ---------------------------------------------------------------- Stage A2
-# One grid per baseline and budget, each at that pair's best N from A1.1.
-# Replace each N_BEST, uncomment, and rerun the sweep command.
-
-# [[grid]]
-# policy = ["task_level_fifo"]
-# concurrency = [N_BEST]          # best task-level N at 16k
-# memory_budget = [16384]
-# arrival_rate = [0.05, 0.15]
-# cache_policy = ["resident"]
-
-# [[grid]]
-# policy = ["task_level_fifo"]
-# concurrency = [N_BEST]          # best task-level N at 32k
-# memory_budget = [32768]
-# arrival_rate = [0.05, 0.15]
-# cache_policy = ["resident"]
-
-# [[grid]]
-# policy = ["request_level_fifo"]
-# concurrency = [N_BEST]          # best request-level N at 16k
-# memory_budget = [16384]
-# arrival_rate = [0.05, 0.15]
-# cache_policy = ["resident"]
-
-# [[grid]]
-# policy = ["request_level_fifo"]
-# concurrency = [N_BEST]          # best request-level N at 32k
-# memory_budget = [32768]
-# arrival_rate = [0.05, 0.15]
-# cache_policy = ["resident"]
+# Each baseline and budget at its best N from A1 (highest mean goodput at rate 0.1, resident,
+# dev workloads), at the two lighter rates: 0.1 already overloads every configuration (A1),
+# so 0.025 / 0.05 / 0.1 is a doubling ladder from light load to overload. The grids are
+# appended below by:
+#   uv run python -m agentserve.best_n /workspace/results/phase1-dev/report/configurations.csv \
+#       --rates 0.025 0.05 >> configs/phase1-dev.toml
 
 # ---------------------------------------------------------------- Stage B (optional)
 # Each baseline at its best N for that budget, as in A2 (one grid per baseline and budget).
@@ -91,7 +84,7 @@ cache_policy = ["off"]
 # policy = ["task_level_fifo"]              # repeat for request_level_fifo with its N
 # concurrency = [N_BEST]
 # memory_budget = [16384]                   # repeat at 32768 with that budget's N
-# arrival_rate = [0.05, 0.1, 0.15]
+# arrival_rate = [0.025, 0.05, 0.1]
 # cache_policy = ["offload"]
 
 # B.2 the 8k budget across rates (N tuned there first if it differs: add 8192 to A1.1)
@@ -99,7 +92,7 @@ cache_policy = ["off"]
 # policy = ["task_level_fifo", "request_level_fifo"]
 # concurrency = [N_BEST]
 # memory_budget = [8192]
-# arrival_rate = [0.05, 0.1, 0.15]
+# arrival_rate = [0.025, 0.05, 0.1]
 # cache_policy = ["resident"]
 
 [base.run]
