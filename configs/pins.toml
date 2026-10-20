@@ -30,7 +30,18 @@ size_bytes = 2019377696
 sha256 = "6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff"
 kv_cache_type = "f16"
 
-[machine.runpod]           # the sweep machine (ADR-0003); every compared experiment runs here
+[machine.runpod_b]         # machine B, from 2026-10-20, after machine A's host failed (configs/phase1-dev-b.toml)
+pod = "Secure Cloud, EUR-IS-1, 1x GPU, ~6.8 vCPU (cgroup quota), no network volume"
+gpu = "NVIDIA RTX 2000 Ada Generation (16380 MiB, compute capability 8.9)"
+nvidia_driver = "595.91.07"
+cuda_driver_api = "13.2"   # host CUDA version reported by RunPod
+cuda_runtime = "12.8"      # nvcc 12.8 from the image, used to build llama-server
+image = "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404"
+compiler = "GNU 13.3.0"
+python = "3.11.13"
+uv = "0.13.0"
+
+[machine.runpod]           # machine A, 2026-10-18 to 10-19: calibration and Stage A1 (configs/phase1-dev.toml)
 pod = "Secure Cloud, EU-RO-1, 1x GPU, ~5 vCPU (cgroup quota)"
 gpu = "NVIDIA RTX 2000 Ada Generation (16380 MiB, compute capability 8.9)"
 nvidia_driver = "580.159.04"
