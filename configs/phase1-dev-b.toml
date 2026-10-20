@@ -24,8 +24,18 @@ arrival_rate = [0.1]
 cache_policy = ["resident"]
 
 # ---------------------------------------------------------------- Stage D: the missing runs
-# Added after the check: N = 16 at 32k for both baselines (complete, all seeds on this
-# machine), then Stage A2 (rates 0.025 / 0.05 at each pair's best N, from agentserve.best_n).
+# The check passed (per-task unloaded time B/A median 1.039; every headline metric within
+# machine A's 95% CI), so only the missing runs are added. scripts/phase1-stage-d.sh runs
+# D1, picks each pair's best N from machine A's A1 report pooled with this machine's report,
+# appends the A2 grids below, and runs them.
+
+# D1: N = 16 at 32k for both baselines, every seed on this machine
+[[grid]]
+policy = ["task_level_fifo", "request_level_fifo"]
+concurrency = [16]
+memory_budget = [32768]
+arrival_rate = [0.1]
+cache_policy = ["resident"]
 
 [base.run]
 seed = 1

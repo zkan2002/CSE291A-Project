@@ -54,13 +54,17 @@ def grids(choice: dict[tuple[str, int], int], rates: list[float], budgets: list[
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("configurations", type=Path, help="a report's configurations.csv")
+    parser.add_argument("configurations", type=Path, nargs="+",
+                        help="reports' configurations.csv files, pooled (e.g. two equivalent machines)")
     parser.add_argument("--rates", type=float, nargs="+", required=True, help="arrival rates for the grids")
     parser.add_argument("--tuning-rate", type=float, default=0.1)
     parser.add_argument("--budgets", type=int, nargs="*", default=[16384, 32768])
     ns = parser.parse_args(argv)
-    with open(ns.configurations, newline="", encoding="utf-8") as f:
-        choice = best_n(list(csv.DictReader(f)), ns.tuning_rate)
+    rows = []
+    for path in ns.configurations:
+        with open(path, newline="", encoding="utf-8") as f:
+            rows += list(csv.DictReader(f))
+    choice = best_n(rows, ns.tuning_rate)
     for (policy, budget), n in sorted(choice.items()):
         print(f"best N: {policy} at {budget} -> {n}", file=sys.stderr)
     print(grids(choice, ns.rates, ns.budgets))
