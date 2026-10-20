@@ -1,0 +1,60 @@
+# Phase 1 on machine B: a second RTX 2000 Ada pod (EUR-IS-1, no network volume, CUDA 12.8
+# toolchain), after machine A (configs/phase1-dev.toml, EU-RO-1) failed mid-sweep.
+# Same workloads, protocol and pinned llama.cpp commit and model; results go to their own
+# directory and are never pooled with machine A's inside one configuration (ADR-0003).
+#
+#   uv run agentserve sweep configs/phase1-dev-b.toml --out /workspace/results/phase1-dev-b
+#
+# Stage C (run first, 5 runs): the equivalence check. It repeats one machine-A configuration
+# (task-level FIFO, N = 4, 16k, rate 0.1, resident, all 5 seeds) and, through the unloaded
+# measurements it makes, re-times the same agent tasks alone. If per-task unloaded times agree
+# within a few percent and the configuration's metrics fall within machine A's 95% CIs, the
+# machines are treated as equivalent and only the missing runs are added (Stage D below);
+# otherwise the rate ladder is re-anchored on this machine as well.
+
+[sweep]
+seeds = [1, 2, 3, 4, 5]
+
+# ---------------------------------------------------------------- Stage C: equivalence check
+[[grid]]
+policy = ["task_level_fifo"]
+concurrency = [4]
+memory_budget = [16384]
+arrival_rate = [0.1]
+cache_policy = ["resident"]
+
+# ---------------------------------------------------------------- Stage D: the missing runs
+# Added after the check: N = 16 at 32k for both baselines (complete, all seeds on this
+# machine), then Stage A2 (rates 0.025 / 0.05 at each pair's best N, from agentserve.best_n).
+
+[base.run]
+seed = 1
+split = "dev"
+warmup_s = 60
+duration_s = 540
+
+[base.workload]
+mix = "default"
+arrival_rate_per_s = 0.1
+arrival_mode = "poisson"
+
+[base.policy]
+name = "task_level_fifo"
+concurrency = 4
+
+[base.runtime]
+kind = "llama_server"
+request_timeout_s = 900
+sample_interval_s = 0.1
+
+[base.server]
+binary = "${AGENTSERVE_ARTIFACTS}/llama.cpp/b11606/llama-server"
+model = "${AGENTSERVE_ARTIFACTS}/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+host = "127.0.0.1"
+port = 8094
+memory_budget = 16384
+slots = 4
+gpu_layers = 99
+cache_ram_mib = 8192
+cache_idle_slots = false
+cache_prompt = true
