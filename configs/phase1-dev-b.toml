@@ -98,3 +98,28 @@ memory_budget = [32768]
 arrival_rate = [0.025, 0.05]
 cache_policy = ["resident"]
 
+
+# ---------------------------------------------------------------- Stage B.1: the offload cache policy
+# llama-server's default (idle context moved to host RAM, agent tasks not pinned) at each pair's
+# best N, across the rate ladder. At 32k both baselines admit everything (peak concurrency 10-13
+# < N = 16) and behave identically, so one baseline stands for both there.
+[[grid]]
+policy = ["task_level_fifo"]
+concurrency = [4]
+memory_budget = [16384]
+arrival_rate = [0.025, 0.05, 0.1]
+cache_policy = ["offload"]
+
+[[grid]]
+policy = ["request_level_fifo"]
+concurrency = [8]
+memory_budget = [16384]
+arrival_rate = [0.025, 0.05, 0.1]
+cache_policy = ["offload"]
+
+[[grid]]
+policy = ["task_level_fifo"]
+concurrency = [16]
+memory_budget = [32768]
+arrival_rate = [0.025, 0.05, 0.1]
+cache_policy = ["offload"]
