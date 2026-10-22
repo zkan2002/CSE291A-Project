@@ -1,17 +1,20 @@
 # Pinned environment
 
 The exact versions live in [`configs/pins.toml`](../configs/pins.toml). Large artifacts are kept
-**outside the repo** in `C:\CSE291A\artifacts\` and referenced by path from `configs/*.toml`.
+**outside the repo** in the artifacts directory: `$AGENTSERVE_ARTIFACTS` if set, otherwise
+`C:\CSE291A\artifacts\` on Windows and `/workspace/artifacts` (a RunPod network volume)
+elsewhere. Server configs name them as `${AGENTSERVE_ARTIFACTS}/...`, and `llama-server` without
+`.exe`, so the same configs run on both.
 
 | What | Pin |
 | --- | --- |
-| llama.cpp | release `b11606` (commit `1b70350c9`), Windows CUDA 13.4 x64 prebuilt + matching cudart |
+| llama.cpp | release `b11606` (commit `1b70350c9`): Windows CUDA 13.4 x64 prebuilt + matching cudart; on Linux, built from source at that commit |
 | Model | `bartowski/Llama-3.2-3B-Instruct-GGUF` @ `5ab33fa9`, `Llama-3.2-3B-Instruct-Q4_K_M.gguf`, SHA256 `6c1a2b41…c728ff` |
 | KV cache | f16 (server default) |
 | GPU / driver | RTX 3060 Ti 8 GB, NVIDIA driver 617.14, CUDA 13.4 |
 | Python | 3.11 via `uv` (`python -m uv`) |
 
-## Fetching the artifacts
+## Fetching the artifacts (Windows desktop)
 
 ```sh
 mkdir -p /c/CSE291A/artifacts/llama.cpp/b11606 /c/CSE291A/artifacts/models
@@ -27,7 +30,38 @@ curl -L -o Llama-3.2-3B-Instruct-Q4_K_M.gguf \
 sha256sum Llama-3.2-3B-Instruct-Q4_K_M.gguf   # 6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff
 ```
 
-If the artifacts live elsewhere, edit `binary` and `model` in the server config.
+If the artifacts live elsewhere, set `AGENTSERVE_ARTIFACTS` rather than editing the configs.
+
+## Running on RunPod
+
+Use a **Pod** (not Serverless): one fixed GPU for the whole sweep, with the harness starting and
+restarting llama-server itself. Docker cannot run inside a pod, so llama.cpp is built from source.
+
+1. **Network volume** (Storage → Network Volumes, ~50 GB) in a datacenter that has the GPU you
+   want. Everything that must outlive the pod (artifacts, results, unloaded cache) lives on it.
+2. **Pod**: one GPU of a single model kept for every comparison; the official Runpod PyTorch
+   template in a `-devel` variant (it carries `nvcc`); the network volume attached at
+   `/workspace`; on-demand pricing; SSH exposed.
+3. **Setup** (over SSH, inside `tmux`):
+
+   ```sh
+   git clone https://github.com/zkan2002/CSE291A-Project.git /workspace/CSE291A-Project
+   cd /workspace/CSE291A-Project && git checkout spec-1-memory-aware-serving
+   bash scripts/runpod-setup.sh
+   ```
+
+   The script installs build tools and uv, builds `llama-server` at the pinned commit into
+   `/workspace/artifacts/llama.cpp/b11606/`, downloads the model, and refuses to finish unless the
+   model's SHA256 and the server's build/commit match `configs/pins.toml`. Rerunning it on a new
+   pod with the same volume skips the build and download.
+4. **Validate** before any sweep: `uv run pytest`, then `uv run pytest -m real_runtime`, then a
+   short real grid. On a pod, `uv` is on `PATH`, so drop the `python -m` used on the desktop.
+5. **Sweep** inside `tmux`, writing to the volume:
+   `uv run agentserve sweep configs/phase1-dev.toml --out /workspace/results/phase1`.
+
+Keep the pod running until the sweep finishes: a stopped pod may come back on a different
+machine, which would make its results incomparable with earlier ones. Copy results off with
+`scp`/`rsync`, then terminate the pod; delete the network volume once nothing on it is needed.
 
 ## Launching the server
 

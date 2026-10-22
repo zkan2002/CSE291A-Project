@@ -1,59 +1,99 @@
-# Phase 1 sweep on development workloads (spec #1 with the pilot amendments; ticket #11).
-#   python -m uv run agentserve sweep configs/phase1-dev.toml --out results/phase1-dev --dry-run
-#   python -m uv run agentserve sweep configs/phase1-dev.toml --out results/phase1-dev
-#   python -m uv run agentserve report results/phase1-dev --out results/phase1-dev/report
-# Rerun the sweep command to resume after an interruption. docs/sweeps.md describes the format.
+# Phase 1 sweep on development workloads (spec #1 with the pilot amendments; ticket #11),
+# staged so the core finishes early and extensions run only if time allows. Runs on the
+# RunPod RTX 2000 Ada pod (ADR-0003); arrival rates come from configs/calibrate-rates.toml.
+#
+#   uv run agentserve sweep configs/phase1-dev.toml --out /workspace/results/phase1-dev --dry-run
+#   uv run agentserve sweep configs/phase1-dev.toml --out /workspace/results/phase1-dev
+#   uv run agentserve report /workspace/results/phase1-dev --out /workspace/results/phase1-dev/report
 #
 # Run protocol: 60 s warm-up, 8 min of measured arrivals, then drain; 5 seeds per
-# configuration; every run restarts the server (cold start, unloaded measurement and
-# experiment each get a fresh llama-server). Agent tasks of classes that cannot fit
-# the 8k budget on their own stay in the mix and count as failed tasks; the report
-# adds goodput over the fitting classes.
+# configuration; every run restarts the server. Agent tasks of classes that cannot fit a
+# budget on their own stay in the mix and count as failed tasks; the report adds goodput
+# over the fitting classes. Rerunning the same command resumes and skips complete sweep
+# runs, so each stage is added by uncommenting its grids and rerunning. If time runs
+# short, cut sweep runs (Stage B first, then rates), never seeds.
 #
-# The grids are a deliberate subset of the full factorial (which would take weeks):
-#   1. N tuning for both baselines at the middle budget and rate (resident).
-#   2. Request-level FIFO pushed past the overflow cliff.
-#   3. Memory budget x arrival rate under both fixed cache policies, at N = 4.
-#   4. Caching off, once, at the middle point.
-# Grid 3 uses N = 4 as a placeholder: once grid 1 is in, set each baseline's best
-# fixed N there (dev workloads only), or add a grid per baseline. Sweep runs that
-# two grids share run once. If time runs short, cut sweep runs (rates first), not seeds.
-# Estimated wall clock: see the ticket #9 hand-off (about 2.5 days as written).
+# Stage A1 (110 runs): tune N per baseline and budget at rate 0.1 (80, plus 15 extending N
+#           to 16 where 8 was best), the overflow cliff (5) and caching off (10).
+# Stage A2 (after A1, 40 runs, ~9 h): both baselines at their best N at rates 0.025 and 0.05;
+#           the grids are generated from the A1 report by agentserve.best_n.
+# Stage B  (only if A is done on schedule, ~90 runs, ~19 h): the offload cache policy and
+#           the 8k budget across rates.
+# Rates: calibration (configs/calibrate-rates.toml) put the onset of KV-pool failures near 0.1
+# at N = 4 and 16k, and A1 showed 0.1 already overloads every configuration, so the ladder is
+# 0.025 / 0.05 / 0.1; above ~0.2 every configuration times out.
 
 [sweep]
 seeds = [1, 2, 3, 4, 5]
 
-# 1. tune N (best fixed N per baseline)
+# ---------------------------------------------------------------- Stage A1
+
+# A1.1 tune N: both baselines, every N, at the two core budgets and the middle rate
 [[grid]]
 policy = ["task_level_fifo", "request_level_fifo"]
 concurrency = [1, 2, 4, 8]
-memory_budget = [16384]
+memory_budget = [16384, 32768]
 arrival_rate = [0.1]
 cache_policy = ["resident"]
 
-# 2. past the overflow cliff: request-level admission with a large N on a small budget
+# A1.2 past the overflow cliff: request-level admission with a large N on a small budget
 [[grid]]
 policy = ["request_level_fifo"]
-concurrency = [8, 16]
+concurrency = [16]
 memory_budget = [8192]
 arrival_rate = [0.1]
 cache_policy = ["resident"]
 
-# 3. memory budget x arrival rate x cache policy
-[[grid]]
-policy = ["task_level_fifo", "request_level_fifo"]
-concurrency = [4]
-memory_budget = [8192, 16384, 32768]
-arrival_rate = [0.05, 0.1, 0.2]
-cache_policy = ["resident", "offload"]
-
-# 4. caching off
+# A1.3 does retained context matter on this runtime? caching off at the middle point
 [[grid]]
 policy = ["task_level_fifo", "request_level_fifo"]
 concurrency = [4]
 memory_budget = [16384]
 arrival_rate = [0.1]
 cache_policy = ["off"]
+
+# A1.4 extend N: in A1.1 the best N was the largest tried (8) for three of the four
+# baseline/budget pairs, so the optimum may lie beyond it
+[[grid]]
+policy = ["request_level_fifo"]
+concurrency = [16]
+memory_budget = [16384, 32768]
+arrival_rate = [0.1]
+cache_policy = ["resident"]
+
+[[grid]]
+policy = ["task_level_fifo"]
+concurrency = [16]
+memory_budget = [32768]
+arrival_rate = [0.1]
+cache_policy = ["resident"]
+
+# ---------------------------------------------------------------- Stage A2
+# Each baseline and budget at its best N from A1 (highest mean goodput at rate 0.1, resident,
+# dev workloads), at the two lighter rates: 0.1 already overloads every configuration (A1),
+# so 0.025 / 0.05 / 0.1 is a doubling ladder from light load to overload. The grids are
+# appended below by:
+#   uv run python -m agentserve.best_n /workspace/results/phase1-dev/report/configurations.csv \
+#       --rates 0.025 0.05 >> configs/phase1-dev.toml
+
+# ---------------------------------------------------------------- Stage B (optional)
+# Each baseline at its best N for that budget, as in A2 (one grid per baseline and budget).
+
+# B.1 the offload cache policy (runtime default) across rates, at both core budgets
+# [[grid]]
+# policy = ["task_level_fifo"]              # repeat for request_level_fifo with its N
+# concurrency = [N_BEST]
+# memory_budget = [16384]                   # repeat at 32768 with that budget's N
+# arrival_rate = [0.025, 0.05, 0.1]
+# cache_policy = ["offload"]
+
+# B.2 the 8k budget across rates (N tuned there first if it differs: add 8192 to A1.1)
+# [[grid]]
+# policy = ["task_level_fifo", "request_level_fifo"]
+# concurrency = [N_BEST]
+# memory_budget = [8192]
+# arrival_rate = [0.025, 0.05, 0.1]
+# cache_policy = ["resident"]
 
 [base.run]
 seed = 1
@@ -76,8 +116,8 @@ request_timeout_s = 900   # beyond any hard timeout the proxy enforces in practi
 sample_interval_s = 0.1
 
 [base.server]
-binary = "C:/CSE291A/artifacts/llama.cpp/b11606/llama-server.exe"
-model = "C:/CSE291A/artifacts/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+binary = "${AGENTSERVE_ARTIFACTS}/llama.cpp/b11606/llama-server"
+model = "${AGENTSERVE_ARTIFACTS}/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf"
 host = "127.0.0.1"
 port = 8094
 memory_budget = 16384     # set per sweep run

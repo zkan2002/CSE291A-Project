@@ -8,6 +8,7 @@ import pytest
 
 from agentserve.cli import main
 from agentserve.report import find_run_dirs
+from agentserve.server import resolve_artifact_path
 
 pytestmark = pytest.mark.real_runtime
 
@@ -28,7 +29,7 @@ cache_policy = ["resident"]
 def test_one_command_runs_a_grid_on_the_real_server_with_a_restart_per_run(tmp_path):
     import tomllib
     base = tomllib.loads(SMOKE.read_text())
-    if not Path(base["server"]["binary"]).exists():
+    if not Path(resolve_artifact_path(base["server"]["binary"])).exists():
         pytest.skip("pinned llama-server not present (see docs/environment.md)")
     base["run"].update(duration_s=12, warmup_s=4)
     sweep = tmp_path / "sweep.toml"

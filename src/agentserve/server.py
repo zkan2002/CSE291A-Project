@@ -4,6 +4,9 @@ The memory budget (ADR-0001) is the token capacity of the shared KV pool, so it 
 to `--kv-unified -c <memory_budget>`. Every cache flag is passed explicitly, so a
 launch never depends on the release's defaults.
 
+``binary`` and ``model`` may start with ``${AGENTSERVE_ARTIFACTS}``, so one config
+runs on the Windows desktop and on a Linux pod (see ``resolve_artifact_path``).
+
 Usage (one documented command):
 
     python -m uv run python -m agentserve.server configs/pilot.toml [--memory-budget N] [--slots N]
@@ -12,6 +15,7 @@ Usage (one documented command):
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -20,6 +24,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
+
+ARTIFACTS_VAR = "AGENTSERVE_ARTIFACTS"
+
+
+def resolve_artifact_path(path: str, *, env=os.environ, platform: str = sys.platform) -> str:
+    """Expand ``${AGENTSERVE_ARTIFACTS}`` (from the environment, else the desktop's or
+    the RunPod volume's artifacts directory). On Windows a binary named without ``.exe``
+    resolves to the ``.exe`` beside it, so configs can name ``llama-server`` on both."""
+    default = "C:/CSE291A/artifacts" if platform == "win32" else "/workspace/artifacts"
+    root = env.get(ARTIFACTS_VAR) or default
+    resolved = path.replace("${" + ARTIFACTS_VAR + "}", root.rstrip("/\\"))
+    if platform == "win32" and not Path(resolved).suffix and Path(resolved + ".exe").exists():
+        resolved += ".exe"
+    return resolved
 
 
 @dataclass(frozen=True)
@@ -35,6 +53,10 @@ class ServerConfig:
     cache_idle_slots: bool = False
     cache_prompt: bool = True
     extra_args: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "binary", resolve_artifact_path(self.binary))
+        object.__setattr__(self, "model", resolve_artifact_path(self.model))
 
     @property
     def base_url(self) -> str:
