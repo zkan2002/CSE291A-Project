@@ -11,8 +11,8 @@ elsewhere. Server configs name them as `${AGENTSERVE_ARTIFACTS}/...`, and `llama
 | llama.cpp | release `b11606` (commit `1b70350c9`): Windows CUDA 13.4 x64 prebuilt + matching cudart; on Linux, built from source at that commit |
 | Model | `bartowski/Llama-3.2-3B-Instruct-GGUF` @ `5ab33fa9`, `Llama-3.2-3B-Instruct-Q4_K_M.gguf`, SHA256 `6c1a2b41…c728ff` |
 | KV cache | f16 (server default) |
-| GPU / driver | RTX 3060 Ti 8 GB, NVIDIA driver 617.14, CUDA 13.4 |
-| Python | 3.11 via `uv` (`python -m uv`) |
+| GPU / driver | Desktop (development): RTX 3060 Ti 8 GB, driver 617.14, CUDA 13.4. Experiments: RunPod RTX 2000 Ada 16 GB, machines A and B (`[machine.runpod]`, `[machine.runpod_b]` in `pins.toml`; ADR-0003, ADR-0004) |
+| Python | 3.11 via `uv` (`python -m uv`; if a project `.venv` is first on `PATH`, `python` has no uv, so use `py -3.11 -m uv`) |
 
 ## Fetching the artifacts (Windows desktop)
 
@@ -37,10 +37,13 @@ If the artifacts live elsewhere, set `AGENTSERVE_ARTIFACTS` rather than editing 
 Use a **Pod** (not Serverless): one fixed GPU for the whole sweep, with the harness starting and
 restarting llama-server itself. Docker cannot run inside a pod, so llama.cpp is built from source.
 
-1. **Network volume** (Storage → Network Volumes, ~50 GB) in a datacenter that has the GPU you
-   want. Everything that must outlive the pod (artifacts, results, unloaded cache) lives on it.
+1. **Storage.** Prefer a network volume (Storage → Network Volumes, ~50 GB) in a datacenter that
+   has the GPU you want, so everything that must outlive the pod (artifacts, results, unloaded
+   cache) lives on it. If no datacenter with a volume has the GPU free (machine B), use the
+   container disk and copy `results/` back to the desktop on a schedule (machine B: every
+   30 minutes); a terminated pod loses its container disk.
 2. **Pod**: one GPU of a single model kept for every comparison; the official Runpod PyTorch
-   template in a `-devel` variant (it carries `nvcc`); the network volume attached at
+   template in a `-devel` variant (it carries `nvcc`); the network volume (if any) attached at
    `/workspace`; on-demand pricing; SSH exposed.
 3. **Setup** (over SSH, inside `tmux`):
 
@@ -60,7 +63,8 @@ restarting llama-server itself. Docker cannot run inside a pod, so llama.cpp is 
    `uv run agentserve sweep configs/phase1-dev.toml --out /workspace/results/phase1`.
 
 Keep the pod running until the sweep finishes: a stopped pod may come back on a different
-machine, which would make its results incomparable with earlier ones. Copy results off with
+machine. Results from a different machine are only pooled after the equivalence check below
+passes (ADR-0004); otherwise everything that is compared is re-run on the new machine. Copy results off with
 `scp`/`rsync`, then terminate the pod; delete the network volume once nothing on it is needed.
 
 ## Launching the server
@@ -110,3 +114,34 @@ python -m uv run agentserve report results/real-grid-smoke --out results/real-gr
 
 `configs/phase1-dev.toml` is the Phase 1 sweep. Rerun the same command to resume an
 interrupted sweep. Format and directory layout: [`sweeps.md`](sweeps.md).
+
+## Phase 1 stages and machine changes
+
+Phase 1 ran in stages on two RunPod machines (ADR-0004). The unattended chains are:
+
+```sh
+bash scripts/phase1-stage-a.sh [OUT]                                # machine A: A1, best N, A2
+bash scripts/phase1-stage-d.sh MACHINE_A_CONFIGURATIONS_CSV [OUT]   # machine B: D1, pooled best N, A2
+```
+
+Each runs sweep → report, then `agentserve.best_n` to pick each baseline's best N per budget and
+append the A2 grids to the sweep config, then sweeps and reports again. `best_n` applies a fixed
+rule (highest mean goodput among resident-cache configurations at the tuning rate, ties to the
+smaller N) and accepts several `configurations.csv` files, pooled:
+
+```sh
+python -m agentserve.best_n REPORT/configurations.csv [MORE.csv ...] --rates 0.025 0.05
+```
+
+Before pooling any results from a new machine, re-run one existing configuration on it with the
+same seeds and compare:
+
+```sh
+python -m agentserve.equivalence RUNS_A RUNS_B --config task_level_fifo-n4-b16384-r0.1-resident
+```
+
+It reports the median per-task unloaded-time ratio (B/A, which must be within ±5%) and whether
+B's mean of each headline metric falls inside A's 95% confidence interval, then prints
+EQUIVALENT or NOT. Machine A's sweep is `configs/phase1-dev.toml`; machine B's is
+`configs/phase1-dev-b.toml`. Raw results are not in git: the durable copies are
+`C:\CSE291Aackups\*.tar.gz` (extract on Windows with `tar --force-local -xzf`).
