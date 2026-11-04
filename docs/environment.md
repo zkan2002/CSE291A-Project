@@ -49,7 +49,7 @@ restarting llama-server itself. Docker cannot run inside a pod, so llama.cpp is 
 
    ```sh
    git clone https://github.com/zkan2002/CSE291A-Project.git /workspace/CSE291A-Project
-   cd /workspace/CSE291A-Project && git checkout spec-1-memory-aware-serving
+   cd /workspace/CSE291A-Project
    bash scripts/runpod-setup.sh
    ```
 
