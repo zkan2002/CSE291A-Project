@@ -3,6 +3,7 @@ name = "agentserve"
 version = "0.1.0"
 description = "Memory-aware agent serving experiments (CSE 291A Option 1)"
 requires-python = ">=3.11,<3.12"
+license = { text = "MIT" }
 dependencies = [
     "httpx>=0.28.1",
     "matplotlib>=3.11.2",

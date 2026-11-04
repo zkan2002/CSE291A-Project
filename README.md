@@ -172,6 +172,10 @@ Recorded as ADRs in [`docs/adr/`](docs/adr/):
 
 Project vocabulary is in [`GLOSSARY.md`](GLOSSARY.md).
 
+## License
+
+The code and data in this repository, and the `phase1-data` release, are available under the [MIT License](LICENSE).
+
 ## Status
 
 - **Phase 1 is complete:** the harness, both baselines, the sweeps, the analysis and the report.
