@@ -67,7 +67,7 @@ One configuration run with one seed: the unit a sweep runs, records and, once co
 _Avoid_: Cell, job, trial
 
 **Failed task**:
-An agent task with at least one model request that returned an error, or that exceeded its hard timeout. Failed tasks stay in every denominator.
+An agent task with at least one model request that returned an error, or that was still unfinished when its hard timeout, measured from its arrival, ran out. Failed tasks count as agent tasks in failure rate and SLO attainment; completion latency covers completed tasks only.
 _Avoid_: Dropped task, skipped task
 
 ### Memory
@@ -75,6 +75,14 @@ _Avoid_: Dropped task, skipped task
 **Memory budget**:
 The capacity, in tokens, of the runtime's shared KV-cache pool; the independent variable the experiments control. Physical memory use is a measured outcome, not the budget.
 _Avoid_: Memory limit, RAM budget, VRAM budget
+
+**In-flight footprint**:
+The tokens that running model requests could occupy at their peak: each one's prompt plus its fixed output length. It is a projection known before admission, not the runtime's actual occupancy.
+_Avoid_: KV usage, memory use
+
+**Overflow abort**:
+The event in which the shared KV-cache pool cannot fit the running model requests and has no idle context left to delete, so the runtime fails all of them at once.
+_Avoid_: Crash, OOM
 
 **Retained context**:
 The KV state of an agent task's earlier steps kept across a tool delay so the next agent step can reuse it instead of recomputing it.

@@ -7,3 +7,11 @@ models/
 vendor/
 results/
 .claude/worktrees/
+# LaTeX build files for docs/reports/phase1-report.tex
+docs/reports/*.aux
+docs/reports/*.log
+docs/reports/*.out
+docs/reports/*.blg
+docs/reports/*.fls
+docs/reports/*.fdb_latexmk
+docs/reports/*.bbl
