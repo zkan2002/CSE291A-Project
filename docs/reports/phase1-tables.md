@@ -79,7 +79,7 @@ Footprints are the proxy's projections (prompt plus n_predict), not the runtime'
 
 ## Over-budget footprint spells and aborts
 
-A spell is a stretch of time in which the projected in-flight footprint exceeds the budget. Counts are summed over all five seeds.
+A spell is a stretch of time in which the projected in-flight footprint exceeds the budget. Counts are summed over all five seeds. Each model request counts at its full projected size from admission, so aborts are likely to fall inside a spell by construction; these counts show the signal is consistent with the aborts, not that holding requests back would prevent them.
 
 | Configuration | Mach. | Over-budget spells | Spells ending in abort | Aborts in window | Aborts without a spell |
 | --- | --- | --- | --- | --- | --- |

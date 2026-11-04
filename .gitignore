@@ -15,3 +15,5 @@ docs/reports/*.blg
 docs/reports/*.fls
 docs/reports/*.fdb_latexmk
 docs/reports/*.bbl
+docs/reports/*.synctex.gz
+docs/reports/*.synctex(busy)

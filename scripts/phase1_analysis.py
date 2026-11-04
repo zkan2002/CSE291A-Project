@@ -456,7 +456,9 @@ def tables(cfg):
 
     doc.section("Over-budget footprint spells and aborts", "spells",
                 "A spell is a stretch of time in which the projected in-flight footprint exceeds the budget. "
-                "Counts are summed over all five seeds.")
+                "Counts are summed over all five seeds. Each model request counts at its full projected size from "
+                "admission, so aborts are likely to fall inside a spell by construction; these counts show the "
+                "signal is consistent with the aborts, not that holding requests back would prevent them.")
     rows = [[describe(name), machine, m["spells"], m["spells_aborted"], m["aborts_measured"], m["aborts_under_budget"]]
             for machine, name, budget, m in mechanisms]
     doc.table(["Configuration", "Mach.", "Over-budget spells", "Spells ending in abort", "Aborts in window",
