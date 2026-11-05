@@ -4,7 +4,7 @@ CSE 291A (Fall 2026), Option 1: *how can admission and scheduling decisions impr
 
 This repository contains the experiment harness, the Phase 1 study and its report. The harness drives synthetic agent workloads through an admission proxy in front of an unmodified llama.cpp server, then measures goodput, latency, failures and memory.
 
-- **Report (PDF):** [`docs/reports/phase1-report.pdf`](docs/reports/phase1-report.pdf), with its LaTeX source in [`docs/reports/phase1-report.tex`](docs/reports/phase1-report.tex).
+- **Report (PDF):** [`docs/reports/phase1-report.pdf`](docs/reports/phase1-report.pdf). It is a 2-page report followed by appendices with the full method, results, limitations, reproducibility instructions and supplementary tables. The LaTeX source is [`docs/reports/phase1-report.tex`](docs/reports/phase1-report.tex), with the appendices in [`phase1-details.tex`](docs/reports/phase1-details.tex) and the generated [`phase1-appendix.tex`](docs/reports/phase1-appendix.tex).
 - **Raw data:** GitHub release [`phase1-data`](https://github.com/zkan2002/CSE291A-Project/releases/tag/phase1-data). It holds every sweep run's logs, configs and metadata; see [Data](#data).
 
 ## Phase 1 in brief
@@ -147,7 +147,7 @@ uv run agentserve sweep configs/phase1-dev-b.toml    --out results/phase1/machin
 bash scripts/phase1-analysis.sh
 ```
 
-Results on other hardware will differ in absolute numbers. Section 8 of the report explains how to compare them with these results.
+Results on other hardware will differ in absolute numbers. Appendix F of the report explains how to compare them with these results.
 
 ### Configs
 
@@ -179,4 +179,4 @@ The code and data in this repository, and the `phase1-data` release, are availab
 ## Status
 
 - **Phase 1 is complete:** the harness, both baselines, the sweeps, the analysis and the report.
-- **Phase 2 (due Dec 10, 2026) is not started.** It is the footprint-based admission policy proposed in Section 6 of the report. It will be evaluated against the tuned baselines on evaluation workloads, after a sustained-capacity measurement and an equivalence check on the new machine.
+- **Phase 2 (due Dec 10, 2026) is not started.** It is the footprint-based admission policy proposed in Section 3 and Appendix D of the report. It will be evaluated against the tuned baselines on evaluation workloads, after a sustained-capacity measurement and an equivalence check on the new machine.

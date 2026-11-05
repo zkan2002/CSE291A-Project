@@ -1,0 +1,402 @@
+% Detailed appendices of the Phase 1 report (input by phase1-report.tex).
+
+\section{Method}\label{sec:method}
+
+\subsection{System and runtime behaviour}\label{sec:system}
+
+The harness has a workload generator, an asyncio proxy that runs a pluggable admission policy, an unmodified \texttt{llama-server}, and a recorder. The memory budget is the token capacity of the server's shared KV-cache pool (\texttt{--kv-unified}). We control it directly and measure physical memory as an outcome, because the server reserves the pool at launch, so a byte limit would mostly make it fail at startup.
+
+A pilot established the behaviour everything else depends on, at the pinned release. The pilot findings (\repofile{docs/pilot/pilot-findings.md}) record the probes and logs; the server source at the pinned commit is cited in~\cite{llamacpp}:
+\begin{itemize}
+  \item Admission counts slots only. It never checks whether a sequence will fit.
+  \item When the pool fills, the server deletes one idle slot's KV and retries, then halves its batch size.
+  \item If that still fails, \textbf{every running sequence fails} with HTTP 500 and loses its KV. We call this an \textbf{overflow abort}. The server stays up, and queued requests still run.
+  \item A request whose prompt plus output exceeds the pool returns HTTP 200 with shortened output. The harness treats this as a failure.
+  \item The server does not report KV occupancy, so the proxy tracks footprints itself.
+\end{itemize}
+
+\subsection{Workload}\label{sec:workload}
+
+Workloads are synthetic so that the experiment controls token counts exactly. Each agent task belongs to one of eight task classes: short or long starting context (500 or 4,000 tokens) $\times$ short or long output per step (50 or 400) $\times$ few or many steps (2--3 or 8--12). Each step adds its output plus a 200-token synthetic tool result, so final context ranges from about 750 to about 11,000 tokens. Tool delays are log-normal with a 1\,s median. Arrivals are open-loop Poisson, so overload appears as queueing instead of being hidden by clients slowing down~\cite{schroeder2006open}.
+
+Prompts are token arrays, and each step's prompt is an exact extension of the previous one, so measured prefix reuse reflects the runtime and not tokenizer drift. Output lengths are fixed (\texttt{n\_predict}, EOS ignored), which means no policy can look better by producing shorter outputs. We checked the parameters against 500 public SWE-agent trajectories~\cite{yang2024sweagent,nebius2024trajectories} (median 16 steps, about 1.9k starting tokens, 79 output tokens per step). These are our sample statistics, computed by \repofile{scripts/trajectory_stats.py}; the workload analysis in \repofile{docs/workload.md} documents the sampling method. Tool delay has no empirical basis, because the dataset has no timings.
+
+\subsection{Baselines and configurations}\label{sec:baselines}
+
+\begin{itemize}
+  \item \textbf{Task-level FIFO:} an agent task holds one of $N$ slots from arrival to completion, tool delays included.
+  \item \textbf{Request-level FIFO:} each model request queues on its own with at most $N$ in flight, and a task re-queues after each tool delay.
+\end{itemize}
+
+We tuned each baseline by goodput over $N \in \{1, 2, 4, 8, 16\}$ at a rate of 0.1 agent tasks/s, with a fixed selection rule (highest mean goodput, ties to smaller $N$). We then ran the best $N$ for each baseline and budget across rates. Cache policies were \textbf{resident} (context stays in the pool, tasks pinned to slots), \textbf{offload} (idle context moves to host RAM, tasks unpinned) and \textbf{off}.
+
+\subsection{Protocol and metrics}\label{sec:protocol}
+
+Each sweep run has a 60\,s warm-up (recorded but excluded), 8 minutes of measured arrivals and a drain, on a freshly started server. Each configuration uses five seeds; we report means with 95\% confidence intervals (Student's $t$). Nothing is retried silently.
+
+\paragraph{What is counted, and over what period.} A run's metrics cover the agent tasks that \emph{arrive} during the 8-minute measured window. Each of those is followed through the drain to its outcome: completion, failure or hard timeout. Throughput and goodput are the number of those tasks that completed, or completed within their SLO, divided by the length of the arrival window (8 minutes). Completions that happen during the drain count; tasks that arrive during warm-up or drain do not. Peak memory, KV occupancy and policy overhead cover the same tasks' whole lifetime, through the drain.
+
+\paragraph{Which tasks each metric includes.} Failed tasks count as agent tasks in failure rate and SLO attainment, and their model requests count in queueing time. Completion-latency percentiles (p50, p95, p99), however, are computed over \textbf{completed agent tasks only}, because a failed task has no completion time. This matters when reading the tables. A configuration that loses its long agent tasks can show \emph{lower} latency than one that finishes them, because the slowest tasks are missing from the sample. Latency should therefore always be read together with failure rate and the per-class breakdown (\cref{sec:classes}). Cached-token shares are likewise computed over successful model requests.
+
+\paragraph{Goodput and failure.} \textbf{Goodput}, the headline metric, counts agent tasks completed within their \textbf{task SLO} per minute. The SLO is $3\times$ the task's unloaded completion time, measured by running it alone on one fixed reference setup (resident, caching on, 32k), so the yardstick does not vary with the configuration under test. A \textbf{failed task} is one in which a model request returned an error, or which was still unfinished at its \textbf{hard timeout}: $10\times$ its unloaded completion time, measured from the task's arrival. The hard timeout therefore bounds the whole agent task, including queueing, every model request and every tool delay, not any single model request.
+
+\subsection{Environment and the machine change}\label{sec:environment}
+
+The model is Meta's Llama-3.2-3B-Instruct~\cite{meta2024llama32}, using bartowski's Q4\_K\_M GGUF artifact at revision \texttt{5ab33fa9}~\cite{bartowski2024gguf} (SHA256 pinned), on llama.cpp b11606 built from source at commit \texttt{1b70350c9}~\cite{llamacpp}, on an RTX 2000 Ada (16\,GB) RunPod pod.
+
+The first pod's host failed partway through the sweep, so the experiments span two machines with the same GPU model but different cards, drivers and CPU quotas. We pooled results only after an explicit check. Re-running one configuration with the same seeds on machine B gave a median per-task unloaded-time ratio of 1.039 (p10 1.003, p90 1.050, 279 tasks) against a $\pm$5\% tolerance, with all six headline metrics inside machine A's 95\% CI. Machine B is therefore consistently about 4\% slower per task.
+
+No configuration's seeds span machines, and each machine sets its own SLOs. Points compared across machines are marked \dag{} below. Tables mark the machine as A or B.
+
+% ---------------------------------------------------------------------------
+\section{Results}\label{sec:results}
+
+\subsection{Concurrency has two different failure modes}\label{sec:tuning}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.9\linewidth]{phase1-figures/fig1-goodput-vs-n.png}
+  \caption{Goodput against $N$ at 0.1 agent tasks/s, resident. Bars are 95\% CIs.}
+  \label{fig:goodput-n}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.9\linewidth]{phase1-figures/fig2-failure-causes.png}
+  \caption{Failed tasks by cause at 0.1 agent tasks/s. $N=16$ at 16k was run for request-level FIFO only.}
+  \label{fig:failure-causes}
+\end{figure}
+
+\begin{table}[t]
+  \centering\small
+  \begin{adjustbox}{max width=\linewidth}
+  \begin{tabular}{llrrrrrrrr}
+    \toprule
+    Baseline & Budget & $N$ & Mach. & Goodput/min & \makecell{Throughput\\/min} & \makecell{Timeout\\\%} & \makecell{Pool\\exhausted \%} & p50 s & \makecell{Queueing\\s} \\
+    \midrule
+    Task-level    & 16k & 1  & A & \pmci{0.28}{0.37} & \pmci{1.98}{0.30} & \pmci{69}{4} & \pmci{0}{0}  & \pmci{359}{80} & \pmci{50.1}{7.4} \\
+    Task-level    & 16k & 2  & A & \pmci{0.57}{0.30} & \pmci{2.62}{0.67} & \pmci{53}{6} & \pmci{6}{4}  & \pmci{178}{29} & \pmci{26.9}{4.2} \\
+    Task-level    & 16k & \textbf{4} & A & \textbf{\pmci{2.73}{0.53}} & \pmci{3.27}{0.82} & \pmci{1}{1} & \pmci{48}{9} & \pmci{20}{4} & \pmci{1.0}{1.2} \\
+    Task-level    & 16k & 8  & A & \pmci{2.58}{0.61} & \pmci{2.58}{0.61} & \pmci{0}{0} & \pmci{60}{8} & \pmci{16}{5} & \pmci{0.0}{0.0} \\
+    Request-level & 16k & \textbf{8} & A & \textbf{\pmci{2.58}{0.61}} & \pmci{2.58}{0.61} & \pmci{0}{0} & \pmci{60}{8} & \pmci{17}{5} & \pmci{0.0}{0.0} \\
+    Task-level    & 32k & 4  & A & \pmci{1.12}{0.51} & \pmci{3.85}{0.91} & \pmci{40}{8} & \pmci{0}{0} & \pmci{154}{26} & \pmci{15.6}{3.1} \\
+    Task-level    & 32k & 8  & A & \pmci{2.70}{0.94} & \pmci{4.15}{0.79} & \pmci{2}{5} & \pmci{33}{5} & \pmci{35}{7} & \pmci{1.1}{1.8} \\
+    Task-level    & 32k & \textbf{16} & B & \textbf{\pmci{3.12}{1.18}} & \pmci{3.60}{1.11} & \pmci{0}{0} & \pmci{44}{12} & \pmci{27}{5} & \pmci{0.0}{0.0} \\
+    Request-level & 32k & \textbf{16} & B & \textbf{\pmci{3.08}{1.15}} & \pmci{3.60}{1.11} & \pmci{0}{0} & \pmci{44}{12} & \pmci{27}{5} & \pmci{0.0}{0.0} \\
+    \bottomrule
+  \end{tabular}
+  \end{adjustbox}
+  \caption{Selected tuning results at 0.1 agent tasks/s, resident (bold: chosen $N$). The full grid is in \cref{app:tuning}.}
+  \label{tab:tuning}
+\end{table}
+
+Small $N$ fails by queueing: tasks wait until they hit their hard timeout. Large $N$ fails by overflow (\cref{fig:failure-causes}). In between there is no setting that avoids failure: \textbf{even the best $N$ fails about half of all agent tasks.} The best $N$ is also a plateau rather than a peak (\cref{fig:goodput-n}). The confidence intervals of neighbouring settings overlap, so the selected values should be read as ``tuning has run out'', not as a precise optimum.
+
+Latencies in \cref{tab:tuning} cover completed agent tasks only, so they must be read with the failure columns. Task-level FIFO at $N=4$ and 16k reports a p50 of 20\,s, well below the 65--79\,s that a long-output, many-step task takes even when it runs alone (\cref{tab:classes}). Almost none of those tasks completed (\cref{sec:classes}), so they are simply missing from the latency sample.
+
+Once $N$ no longer binds, the two baselines behave identically, because queueing is zero and the limit is never reached. Below that point request-level FIFO is worse, because re-queueing every step breaks retained context: at $N=1$ and 16k its cached-token share is \pmci{75}{15}\%, against \pmci{91}{1}\% for task-level FIFO.
+
+\subsection{Overflow is a sudden collective failure}\label{sec:overflow}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{phase1-figures/fig3-abort-anatomy.png}
+  \caption{Projected footprint of running requests (prompt plus \texttt{n\_predict}) over one run: task-level FIFO, $N=4$, 16k, 0.1 agent tasks/s, seed 1. Footprint builds up, crosses the budget and collapses when the abort fails everything running.}
+  \label{fig:abort-anatomy}
+\end{figure}
+
+\begin{table}[t]
+  \centering\small
+  \begin{adjustbox}{max width=\linewidth}
+  \begin{tabular}{lcrrrrr}
+    \toprule
+    Configuration & Mach. & \makecell{Aborts\\per run} & \makecell{Failed requests\\per abort} & \makecell{Footprint at abort\\(\% of budget)} & \makecell{Mean admitted\\(\% of budget)} & \makecell{Recorded output on\\failed tasks \%} \\
+    \midrule
+    Task-level, $N=4$, 16k, 0.025/s      & B & \pmci{0.8}{1.0}  & 2.8 & 104 & 21 & \pmci{21}{27} \\
+    Task-level, $N=4$, 16k, 0.05/s       & B & \pmci{2.2}{1.0}  & 3.5 & 106 & 35 & \pmci{32}{14} \\
+    Task-level, $N=4$, 16k, 0.1/s        & A & \pmci{6.4}{1.4}  & 3.8 & 108 & 52 & \pmci{63}{7} \\
+    Request-level, $N=8$, 16k, 0.1/s     & A & \pmci{6.2}{1.0}  & 4.9 & 117 & 42 & \pmci{58}{7} \\
+    Task-level, $N=16$, 32k, 0.05/s      & B & \pmci{0.4}{0.7}  & 8.0 & 111 & 35 & \pmci{15}{25} \\
+    Task-level, $N=16$, 32k, 0.1/s       & B & \pmci{2.4}{0.7}  & 9.3 & 111 & 43 & \pmci{39}{20} \\
+    Request-level, $N=16$, 8k, 0.1/s     & A & \pmci{12.8}{2.2} & 2.9 & 118 & 35 & \pmci{62}{9} \\
+    \bottomrule
+  \end{tabular}
+  \end{adjustbox}
+  \caption{Overflow events, computed from the request and KV logs. Footprints are the proxy's projections (\cref{sec:limitations}). Recorded output counts the tokens returned by model requests that completed. A request cut off by an abort returns nothing, so the tokens it had already generated are not counted. Full table with over-budget spells: \cref{app:overflow,app:spells}.}
+  \label{tab:overflow}
+\end{table}
+
+\Cref{fig:abort-anatomy} shows the pattern in one run, and \cref{tab:overflow} quantifies it. Three things stand out:
+\begin{itemize}
+  \item \textbf{Failures are correlated.} One abort takes out almost everything running (3.8 of 4 at $N=4$), so one event costs several agent tasks and all the work they had done. That is why so much of the recorded output belongs to tasks that eventually fail.
+  \item \textbf{Pressure is episodic, not sustained.} Mean admitted footprint is only 21--52\% of the budget, yet aborts still occur. Capacity exists on average; the failure comes from brief coincidences of large requests. This is the opening for an admission policy.
+  \item \textbf{Aborts happen when nothing is idle.} Across the configurations in \cref{tab:overflow} the proxy's estimate of retained context at the moment of an abort is essentially zero, and in the four runs we checked directly (up to four aborts each), request logs confirm every agent task in the system was running. This is consistent with the runtime deleting idle context first, so an abort comes only after that option is used up. Idle-slot deletions are rare in the server logs (about 5 per run at $N=4$, 16k, 0.1/s).
+\end{itemize}
+
+\subsection{More memory alone does not fix it}\label{sec:budget}
+
+Doubling the budget at fixed $N=4$ removes aborts completely, but goodput \emph{falls} from \pmci{2.73}{0.53} to \pmci{1.12}{0.51}, as failures shift from pool exhaustion (48\%) to hard timeouts (40\%). Throughput does not fall (\pmci{3.27}{0.82} to \pmci{3.85}{0.91}, CIs overlapping). Our interpretation is that at 16k aborts shed load, leaving compute for the survivors, whereas at 32k all tasks stay and queue until they miss their SLOs. Goodput therefore cannot be read as ``higher is healthier'' without the failure breakdown.
+
+This suggests a second limit, though Phase~1 did not measure it directly. At 0.1 agent tasks/s the default mix offers about 141 output tokens/s by construction (1,406 output tokens per task on average). The most output we observed at that rate is about 150 tokens per second of arrival window, among resident configurations (request-level $N=2$, 32k: \pmci{152}{26}; \cref{app:output}).
+
+That second number is \textbf{not a steady-state capacity}. It is all output generated for the measured agent tasks, including output generated during the drain, divided by the length of the arrival window. Still, three observations together suggest that \textbf{compute pressure at 0.1 agent tasks/s may limit what any memory policy can gain}:
+\begin{itemize}
+  \item offered load is close to the most output observed;
+  \item small $N$ queues until tasks time out;
+  \item $N=4$ at 32k times out 40\% of tasks with no aborts at all.
+\end{itemize}
+Confirming this needs a sustained capacity measurement, which \cref{sec:phase2} plans.
+
+\subsection{At lower load, memory is the limit}\label{sec:rates}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.7\linewidth]{phase1-figures/fig4-slo-vs-rate.png}
+  \caption{Share of agent tasks within their SLO for task-level FIFO at each budget's best $N$, all on machine B.}
+  \label{fig:slo-rate}
+\end{figure}
+
+\begin{table}[t]
+  \centering\small
+  \begin{tabular}{llrrcrrrr}
+    \toprule
+    Baseline & Budget & $N$ & Rate/s & Mach. & Goodput/min & \makecell{Within\\SLO \%} & \makecell{Failed\\\%} & p95 s \\
+    \midrule
+    Task-level    & 16k & 4  & 0.025 & B & \pmci{1.12}{0.27} & \pmci{84}{19}  & \pmci{16}{19} & \pmci{77}{13} \\
+    Task-level    & 16k & 4  & 0.05  & B & \pmci{2.20}{0.65} & \pmci{70}{10}  & \pmci{30}{10} & \pmci{88}{16} \\
+    Task-level    & 16k & 4  & 0.1   & B & \pmci{2.95}{0.63} & \pmci{46}{8}   & \pmci{48}{10} & \pmci{51}{41} \\
+    Request-level & 16k & 8  & 0.025 & B & \pmci{1.10}{0.28} & \pmci{82}{22}  & \pmci{18}{22} & \pmci{75}{15} \\
+    Request-level & 16k & 8  & 0.05  & B & \pmci{2.12}{0.57} & \pmci{68}{11}  & \pmci{32}{11} & \pmci{79}{29} \\
+    Request-level & 16k & 8  & 0.1\,\dag & A & \pmci{2.58}{0.61} & \pmci{40}{8} & \pmci{60}{8} & \pmci{41}{21} \\
+    Task-level    & 32k & 16 & 0.025 & B & \pmci{1.40}{0.60} & \pmci{100}{0}  & \pmci{0}{0}   & \pmci{93}{27} \\
+    Task-level    & 32k & 16 & 0.05  & B & \pmci{2.42}{0.66} & \pmci{78}{18}  & \pmci{13}{22} & \pmci{134}{42} \\
+    Task-level    & 32k & 16 & 0.1   & B & \pmci{3.12}{1.18} & \pmci{48}{14}  & \pmci{44}{12} & \pmci{97}{54} \\
+    \bottomrule
+  \end{tabular}
+  \caption{Arrival-rate ladder at best $N$. \dag{} measured on a different machine from the rest of its series. Request-level FIFO at 32k is in \cref{app:ladder}.}
+  \label{tab:ladder}
+\end{table}
+
+At 0.025--0.05 agent tasks/s, output per second of arrival window is 34--74 tokens, half or less of the most observed at 0.1 agent tasks/s, yet tasks still fail (\cref{fig:slo-rate,tab:ladder}). On the 16k budget those failures are all pool exhaustion, which points to memory as the binding constraint at these rates. Even at 0.025 tasks/s, about one task arrival every 40\,s, 16\% of agent tasks fail on a 16k budget. Variability is high at these rates because each run has few arrivals and abort failures are correlated.
+
+The cliff is steepest with a very small budget: request-level FIFO at $N=16$ and 8k fails \pmci{72}{7}\% of agent tasks, nearly all from pool exhaustion. Only one of the eight task classes (12\% of agent tasks) cannot fit in 8k alone, yet the seven that fit also fail, at 14--96\% (\cref{app:cliff}), so most of this cliff comes from tasks colliding rather than from tasks that could never fit.
+
+\subsection{Long agent tasks bear most of the failures}\label{sec:classes}
+
+\begin{table}[t]
+  \centering\small
+  \begin{tabular}{lrrr}
+    \toprule
+    \makecell[l]{Task class\\(output, steps, starting context)} & \makecell{Median\\unloaded s} & \makecell{Failed \%\\$N=4$, 16k (A)} & \makecell{Failed \%\\$N=16$, 32k (B)} \\
+    \midrule
+    long output, many steps, long context   & 78.9 & 100 & 89 \\
+    long output, many steps, short context  & 64.9 & 99  & 70 \\
+    short output, many steps, long context  & 18.6 & 58  & 33 \\
+    long output, few steps, long context    & 13.6 & 50  & 39 \\
+    short output, many steps, short context & 18.1 & 23  & 40 \\
+    long output, few steps, short context   & 11.6 & 15  & 25 \\
+    short output, few steps, long context   & 4.6  & 15  & 21 \\
+    short output, few steps, short context  & 3.8  & 9   & 18 \\
+    \bottomrule
+  \end{tabular}
+  \caption{Failure rate by task class at 0.1 agent tasks/s, task-level FIFO, best $N$. Full breakdown: \cref{app:classes,app:unloaded}.}
+  \label{tab:classes}
+\end{table}
+
+Every one of these classes fits in the budget alone at 16k and 32k, yet long-output, many-step tasks almost never finish (\cref{tab:classes}). They stay in the system longest, so they are the most likely to be running when an abort occurs. Those two classes are 28\% of agent tasks but about 71\% of the output demand. \textbf{The headline goodput of the tuned baselines is therefore partly achieved by losing the longest work}, and their latency percentiles, computed over completed tasks only, are flattered for the same reason. This matters for Phase~2: a policy could raise goodput by starving long tasks even further, so per-class results must be reported alongside it.
+
+\subsection{Retained context matters; offloading showed no clear benefit}\label{sec:cache}
+
+\begin{table}[t]
+  \centering\small
+  \begin{adjustbox}{max width=\linewidth}
+  \begin{tabular}{llrrlcrrrr}
+    \toprule
+    Baseline & Budget & $N$ & Rate/s & \makecell{Cache\\policy} & Mach. & Goodput/min & \makecell{Cached\\\%} & p50 s & \makecell{Peak host\\RAM MiB} \\
+    \midrule
+    Task-level    & 16k & 4  & 0.1   & resident & A & \pmci{2.73}{0.53} & \pmci{77}{3} & \pmci{20}{4}  & \pmci{8507}{1057} \\
+    Task-level    & 16k & 4  & 0.1   & off      & A & \pmci{0.57}{0.45} & 0            & \pmci{69}{27} & \pmci{746}{1} \\
+    Request-level & 16k & 4  & 0.1   & resident & A & \pmci{1.95}{1.26} & \pmci{71}{4} & \pmci{27}{21} & \pmci{8767}{439} \\
+    Request-level & 16k & 4  & 0.1   & off      & A & \pmci{0.33}{0.32} & 0            & \pmci{67}{22} & \pmci{746}{2} \\
+    Task-level    & 16k & 4  & 0.025 & resident & B & \pmci{1.12}{0.27} & \pmci{85}{3} & \pmci{17}{7}  & \pmci{4372}{1112} \\
+    Task-level    & 16k & 4  & 0.025 & offload  & B & \pmci{1.18}{0.40} & \pmci{85}{2} & \pmci{16}{5}  & \pmci{5091}{1282} \\
+    Task-level    & 16k & 4  & 0.05  & resident & B & \pmci{2.20}{0.65} & \pmci{83}{2} & \pmci{19}{4}  & \pmci{6134}{1628} \\
+    Task-level    & 16k & 4  & 0.05  & offload  & B & \pmci{2.20}{0.65} & \pmci{83}{2} & \pmci{18}{4}  & \pmci{7789}{1244} \\
+    Task-level    & 32k & 16 & 0.05  & resident & B & \pmci{2.42}{0.66} & \pmci{86}{3} & \pmci{31}{11} & \pmci{8260}{1085} \\
+    Task-level    & 32k & 16 & 0.05  & offload  & B & \pmci{2.73}{0.90} & \pmci{86}{2} & \pmci{26}{8}  & \pmci{8709}{799} \\
+    Task-level    & 32k & 16 & 0.1   & resident & B & \pmci{3.12}{1.18} & \pmci{80}{3} & \pmci{27}{5}  & \pmci{8940}{138} \\
+    Task-level    & 32k & 16 & 0.1   & offload  & B & \pmci{2.98}{1.05} & \pmci{79}{3} & \pmci{27}{7}  & \pmci{9016}{24} \\
+    \bottomrule
+  \end{tabular}
+  \end{adjustbox}
+  \caption{Effect of cache policy. Each comparison stays on one machine. VRAM per row: \cref{app:cache}.}
+  \label{tab:cache}
+\end{table}
+
+Turning caching off cuts goodput $4.8\times$ for task-level FIFO and $5.9\times$ for request-level, and raises median latency about $3\times$ (\cref{tab:cache}). Agent workloads depend on prefix reuse: 71--86\% of prompt tokens are served from cache with caching on. Any Phase~2 policy must preserve this reuse.
+
+\textbf{We observed no clear benefit from offload under the tested conditions.} At every rate tested, offload's mean goodput and cache reuse were close to resident's, with 95\% confidence intervals that overlap widely; we did not run a formal test for a difference. Offload also used more host RAM at lower rates. One explanation is consistent with \cref{sec:overflow}: at an abort no idle context remains to move out of the way, so moving idle context out earlier would not address the cause.
+
+This is not strong enough to rule offload out:
+\begin{itemize}
+  \item Each comparison rests on five seeds with wide intervals, so a modest effect could go undetected.
+  \item Every run used a single tool-delay setting (1\,s median). Offload is about context that sits idle during tool delays, so longer or more variable delays could change the result.
+\end{itemize}
+The tool-delay sweep listed in \cref{sec:limitations} is the test that could overturn this conclusion.
+
+\subsection{Physical memory, overhead and cold start}\label{sec:physical}
+
+\begin{itemize}
+  \item \textbf{VRAM follows the budget, not the load.} Peak VRAM is about 3.4, 4.3 and 6.1\,GiB at 8k, 16k and 32k and varies little across rates, consistent with a pool reserved at launch. The slope is about 113\,KB per token.
+  \item \textbf{Host RAM follows load and caching.} It rises with load toward the \texttt{--cache-ram} limit (8192\,MiB plus about 750\,MiB for the process), and stays at 746\,MiB with caching off. Retained context has a real memory cost outside the KV budget.
+  \item \textbf{Policy overhead is negligible:} about 20--30\,\textmu s per decision, against model requests that take seconds.
+  \item \textbf{Cold start is small.} Launch to healthy took a median of 2.8\,s (A) and 1.6\,s (B), and a first probe request took 0.75\,s against 0.58\,s warm (A), and 0.52\,s against 0.53\,s (B) (\cref{app:coldstart}). Steady-state results do not depend on it, as warm-up is excluded.
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\section{The dominant bottleneck}\label{sec:bottleneck}
+
+The bottleneck depends on load:
+\begin{itemize}
+  \item \textbf{Below about 0.1 agent tasks/s, it is the combined KV footprint of concurrently running requests,} interacting with a runtime that can only fail all of them when it overflows. Failures here are pool exhaustion, output is well below the most observed at higher load, and mean memory use is well below the budget.
+  \item \textbf{At about 0.1 agent tasks/s, compute pressure probably also matters.} Removing aborts by adding memory converted failures into timeouts rather than completions (\cref{sec:budget}). This is an inference from offered load and failure causes, not a measured capacity limit.
+\end{itemize}
+
+Static tuning cannot resolve this, because a slot count is the wrong unit: four short tasks and four long tasks at the same $N$ differ in footprint by an order of magnitude. Tuned $N$ therefore has to trade queueing under small tasks against overflow under large ones.
+
+% ---------------------------------------------------------------------------
+\section{Phase 2 direction: footprint-based admission}\label{sec:phase2}
+
+\paragraph{Mechanism.} Before admitting a model request, the proxy compares its known peak footprint (prompt tokens plus \texttt{n\_predict}), added to the footprint of everything in flight, with the memory budget. If it does not fit, the request waits.
+
+\paragraph{Why this one, from the measurements.} \Cref{tab:candidates} compares the candidates.
+
+\begin{table}[t]
+  \centering\small
+  \begin{tabular}{p{0.2\linewidth}p{0.42\linewidth}p{0.3\linewidth}}
+    \toprule
+    Candidate & Evidence & Verdict \\
+    \midrule
+    Tune fixed $N$ & Best $N$ still fails about half of tasks at 0.1/s (\cref{sec:tuning}) & Keep as the baseline to beat \\
+    Increase the budget & Removes aborts but goodput can fall (\cref{sec:budget}) & Not a policy; it costs memory \\
+    Offload idle context & No clear benefit at the one tool delay tested (\cref{sec:cache}) & Not pursued now; revisit after a tool-delay sweep \\
+    Choose which idle context to evict & Aborts occur with nothing idle; deletions are rare at the tested tool delay (\cref{sec:overflow}) & Low leverage under tested conditions; possible later extension \\
+    \textbf{Admit by footprint} & Over-budget footprint coincided with 145 of 146 aborts (partly by construction); mean use is only 21--52\% of budget & \textbf{Selected} \\
+    \bottomrule
+  \end{tabular}
+  \caption{Phase~2 candidates and the evidence for each.}
+  \label{tab:candidates}
+\end{table}
+
+The signal is available and consistent with the aborts. Footprint is known exactly before admission and costs almost nothing to compute. Across the configurations in \cref{tab:overflow} where aborts occurred, 145 of 146 aborts in the measured window happened during a spell of over-budget projected footprint (\cref{app:spells}). About 72\% of those spells ended in an abort (151 of 211). The rest ended safely, because requests finished before reaching their full projected size, which suggests the rule will sometimes hold back work unnecessarily. Measuring that cost is part of Phase~2. This coincidence is partly built into the measurement. Each model request counts at its full projected size from the moment it is admitted, so an overflow of the real pool is likely to fall inside an over-budget projection whether or not the projection is a useful signal. The 145 of 146 therefore shows that the signal is consistent with the aborts, not that holding requests back would prevent them; that is what H1 tests.
+
+\paragraph{Hypotheses, each of which can fail.}
+\begin{itemize}
+  \item \textbf{H1.} At 0.025--0.05 agent tasks/s, footprint-based admission eliminates almost all overflow aborts and raises goodput over the best tuned $N$.
+  \item \textbf{H2.} At 0.1 agent tasks/s the gain is smaller, if the compute pressure suggested in \cref{sec:budget} limits it. A sustained capacity measurement, run first, tests whether that limit exists. Little or no gain at this rate would be a valid result.
+  \item \textbf{H3.} Without care, waiting for room will starve long agent tasks. The policy may need to favour tasks already in progress, since their work is invested. We will test this per task class.
+\end{itemize}
+
+\paragraph{Evaluation plan.} Compare against FIFO and the best fixed $N$ for each baseline, selected on development workloads only, using evaluation workloads with separate seeds and the held-out mix. Include varying arrival rates, bursty arrivals, and both budgets. Report goodput, latency percentiles, peak memory and failure rate per cause and per task class, as well as policy overhead. Compare against a fixed cache policy, and include a variant with the mechanism removed. Before any policy runs, measure sustained capacity: run a closed loop that keeps the server at fixed concurrency with no arrivals, warm-up or drain in the measured window, and record steady-state output tokens/s at each concurrency. This replaces the arrival-window estimate in \cref{sec:budget}. A new pod must pass the same equivalence check against machine B first.
+
+% ---------------------------------------------------------------------------
+\section{Limitations}\label{sec:limitations}
+
+\begin{itemize}
+  \item \textbf{Idle periods were not varied.} Tool delay stayed at a 1\,s median, so this phase does not determine how idle time affects memory pressure beyond what \cref{sec:overflow} shows. A tool-delay sweep is still needed. It could also change the conclusions about offload (\cref{sec:cache}) and about evicting idle context (\cref{sec:phase2}), because both depend on how long context sits idle.
+  \item \textbf{No sustained capacity measurement.} The suspected compute limit in \cref{sec:budget,sec:bottleneck} is an inference, not a measurement. The output rates reported include output generated during the drain, divided by the arrival window, so they are not steady-state throughput.
+  \item \textbf{Projected, not actual, occupancy.} The server does not report KV occupancy, so footprints are the proxy's calculations of prompt plus \texttt{n\_predict}. Actual occupancy at an abort is lower than the projection, and the proxy cannot see the server's deletions of idle slots.
+  \item \textbf{Small samples per run.} Each run has about 11--51 measured agent tasks, abort failures are correlated, and confidence intervals are correspondingly wide. Many differences between neighbouring settings are not significant.
+  \item \textbf{Synthetic workload.} Parameters are checked against public trajectories, but tool-delay values are assumed, and token counts in that check use a stand-in tokenizer. The mix is uniform by design, and real workloads may have fewer very long tasks.
+  \item \textbf{Two machines.} Machine B is about 4\% slower per task, and SLOs differ per machine. Cross-machine points are marked, and the equivalence check covers one configuration only.
+  \item \textbf{Single model and scope limits.} Results are for one model and precision on one GPU type. Only development workloads and Poisson arrivals were used; the 8k budget was run only at one rate; $N$ above 16 was not tested, since at $N=16$ concurrency peaked at 10--13. Rate calibration used one seed and is indicative only. The optional AWS CPU check was not done.
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\section{Reproducibility}\label{sec:repro}
+
+Versions are pinned in \repofile{configs/pins.toml}. Every sweep run records its full configuration, seed, versions, model hash, launch arguments and raw logs.
+
+\subsection{Evidence: the raw-result archives}\label{sec:evidence}
+
+The raw results are \textbf{not in Git}, because \texttt{results/} is ignored. A repository checkout alone therefore does not contain the evidence for this report. The two archives in \cref{tab:archives} are the source of truth for every number above. They are attached, with their checksum file, to the repository's GitHub release \href{https://github.com/zkan2002/CSE291A-Project/releases/tag/phase1-data}{\texttt{phase1-data}}:
+
+\begin{lstlisting}[language=bash]
+gh release download phase1-data -R zkan2002/CSE291A-Project -D phase1-archives
+# then use phase1-archives as ARCHIVE_DIR
+\end{lstlisting}
+
+\begin{table}[H]
+  \centering\small
+  \begin{tabular}{lcrp{0.36\linewidth}}
+    \toprule
+    Archive & Machine & Size & Contents \\
+    \midrule
+    \texttt{pod-results-2026-10-19.tar.gz} & A & 24.7\,MB & \path{results/phase1-dev/}: 102 complete sweep runs, plus 1 \texttt{.partial} run killed by the reboot. \path{results/calibrate-rates/}: 7 calibration runs. The sweep config as run, and pod logs. \\
+    \texttt{machine-b-final-2026-10-21.tar.gz} & B & 17.2\,MB & \path{results/phase1-dev-b/}: 100 complete sweep runs. The sweep config as run (generated grids included), and pod logs. \\
+    \bottomrule
+  \end{tabular}
+  \caption{Raw-result archives.}
+  \label{tab:archives}
+\end{table}
+
+SHA-256 checksums are in \repofile{docs/reports/phase1-archives.sha256}. The sweep configs inside the archives are identical to \repofile{configs/phase1-dev.toml} and \repofile{configs/phase1-dev-b.toml} in the repository.
+
+The analysis uses 200 of these sweep runs. Machine A's \texttt{.partial} run is excluded, and so are the two complete seeds of its configuration (request-level FIFO, $N=16$, 32k, 0.1/s), because that configuration was re-run in full on machine B (ADR-0004).
+
+\subsection{Reproducing the analysis from the supplied logs}\label{sec:repro-analysis}
+
+This needs no GPU. From a fresh checkout, with the two archives in \texttt{ARCHIVE\_DIR} (for example, downloaded as in \cref{sec:evidence}):
+
+\begin{lstlisting}[language=bash]
+uv sync
+# verify the checksums and extract into results/phase1/
+bash scripts/phase1-extract.sh ARCHIVE_DIR
+# read results/phase1/ and write the tables and figures
+bash scripts/phase1-analysis.sh
+\end{lstlisting}
+
+\texttt{phase1-extract.sh} refuses to overwrite a non-empty target. It produces:
+
+\begin{lstlisting}
+results/phase1/machine-a/results/phase1-dev/runs/        machine A's sweep runs
+results/phase1/machine-a/results/calibrate-rates/runs/   calibration runs
+results/phase1/machine-b/results/phase1-dev-b/runs/      machine B's sweep runs
+\end{lstlisting}
+
+\texttt{phase1-analysis.sh} then runs these steps in order:
+\begin{enumerate}
+  \item \texttt{agentserve report} for each machine and for calibration, into \texttt{results/phase1/report-a/}, \texttt{report-b/} and \texttt{report-calibration/}.
+  \item The equivalence check between the machines (prints \texttt{EQUIVALENT}).
+  \item \texttt{agentserve.best\_n} on both reports. It prints the chosen $N$ per baseline and budget, which must match the grids recorded in \path{configs/phase1-dev-b.toml}.
+  \item \path{scripts/phase1_analysis.py}, which writes the tables (\path{docs/reports/phase1-tables.md}), the appendix of this report (\path{docs/reports/phase1-appendix.tex}) and the figures (\path{docs/reports/phase1-figures/}).
+\end{enumerate}
+
+Running this sequence from a fresh extraction of the archives reproduced the tables exactly. On a machine where \texttt{uv} is not on \texttt{PATH}, set it explicitly, for example \texttt{UV="py -3.11 -m uv" bash scripts/phase1-analysis.sh}.
+
+\subsection{Rerunning the experiments}\label{sec:repro-rerun}
+
+This needs an NVIDIA GPU; we used an RTX 2000 Ada (16\,GB) on RunPod. \repofile{docs/environment.md} covers pod setup. The sweep outputs go into the same layout as \cref{sec:repro-analysis}, so the same analysis command reads them:
+
+\begin{lstlisting}[language=bash]
+# build llama.cpp b11606, download the model, check both against pins.toml
+bash scripts/runpod-setup.sh
+uv run pytest && uv run pytest -m real_runtime
+uv run agentserve sweep configs/calibrate-rates.toml \
+    --out results/phase1/machine-a/results/calibrate-rates
+uv run agentserve sweep configs/phase1-dev.toml \
+    --out results/phase1/machine-a/results/phase1-dev
+uv run agentserve sweep configs/phase1-dev-b.toml \
+    --out results/phase1/machine-b/results/phase1-dev-b
+bash scripts/phase1-analysis.sh
+\end{lstlisting}
+
+A few things differ from the original run:
+\begin{itemize}
+  \item \textbf{Time:} each sweep takes roughly one to one and a half days of GPU time. Rerunning the same command resumes an interrupted sweep and skips runs that are already complete.
+  \item \textbf{Best $N$ is not recomputed by the sweeps:} the best-$N$ grids are already in \path{configs/phase1-dev-b.toml}, so \texttt{best\_n} in step 3 of the analysis only checks that the choice still holds.
+  \item \textbf{One machine instead of two:} both configs run on the same machine, so \texttt{machine-a} and \texttt{machine-b} become directory names only. \path{configs/phase1-dev.toml} also completes the $N=16$, 32k configurations that machine A never finished; the analysis then reads those from \texttt{machine-a}.
+  \item \textbf{Results will vary:} task SLOs are re-measured on the new machine. A different GPU, driver or CPU quota changes absolute timings, and it can also change which failure mode dominates and which $N$ is best. The reported confidence intervals describe variation across seeds on our two machines, not across hardware. On different hardware, compare the qualitative findings, and run the equivalence check (ADR-0004) before comparing any numbers directly.
+  \item \textbf{Comparing against these results:} to compare a new machine with these results rather than replace them, first run the equivalence check against the supplied machine B runs (ADR-0004).
+\end{itemize}
+

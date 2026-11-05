@@ -200,8 +200,10 @@ def figure_tuning(cfg):
     plt.close(fig)
 
 
-def figure_failures(cfg):
-    fig, axes = plt.subplots(2, 2, figsize=(7.2, 4.4), sharex=True, sharey=True)
+def figure_failures(cfg, compact=False):
+    """compact: a single-column version for the 2-page report."""
+    title_size, small = (7, 6.5) if compact else (10, 9)
+    fig, axes = plt.subplots(2, 2, figsize=(3.4, 2.5) if compact else (7.2, 4.4), sharex=True, sharey=True)
     for i, policy in enumerate(LABELS):
         for j, budget in enumerate((16384, 32768)):
             ax = axes[i][j]
@@ -213,16 +215,17 @@ def figure_failures(cfg):
             ax.bar(pos, timeout, width=0.55, color=TIMEOUT, label="Hard timeout", edgecolor="white", linewidth=1)
             ax.bar(pos, pool, width=0.55, bottom=timeout, color=POOL, label="Pool exhausted", edgecolor="white", linewidth=1)
             ax.set_xticks(range(5), ["1", "2", "4", "8", "16"])
-            ax.set_title(f"{LABELS[policy]}, {budget // 1024}k", color=INK, fontsize=10, loc="left")
+            ax.set_title(f"{LABELS[policy]}, {budget // 1024}k", color=INK, fontsize=title_size, loc="left")
             ax.set_ylim(0, 100)
             style(ax)
-    axes[0][0].legend(frameon=False, loc="upper right", labelcolor=INK_2, fontsize=9)
+            ax.tick_params(labelsize=small)
+    axes[0][0].legend(frameon=False, loc="upper right", labelcolor=INK_2, fontsize=small)
     for ax in axes[1]:
-        ax.set_xlabel("Concurrency N", color=INK_2)
+        ax.set_xlabel("Concurrency N", color=INK_2, fontsize=small)
     for row in axes:
-        row[0].set_ylabel("Failed tasks (%)", color=INK_2)
-    fig.tight_layout()
-    fig.savefig(FIGURES / "fig2-failure-causes.png", dpi=200)
+        row[0].set_ylabel("Failed tasks (%)", color=INK_2, fontsize=small)
+    fig.tight_layout(pad=0.3)
+    fig.savefig(FIGURES / ("compact-failure-causes.png" if compact else "fig2-failure-causes.png"), dpi=300)
     plt.close(fig)
 
 
@@ -251,18 +254,20 @@ def figure_rates(cfg):
     plt.close(fig)
 
 
-def figure_abort_anatomy():
+def figure_abort_anatomy(compact=False):
+    """compact: a single-column version for the 2-page report."""
+    small = 6.5 if compact else 9
     run = RUNS["A"] / "task_level_fifo-n4-b16384-r0.1-resident-s1"
     kv = read_jsonl(run / "kv.jsonl")
     start, end = 60, 540
     points = [k for k in kv if start <= k["t_s"] <= end]
-    fig, ax = plt.subplots(figsize=(7.2, 2.7))
+    fig, ax = plt.subplots(figsize=(3.4, 1.55) if compact else (7.2, 2.7))
     ax.step(
         [k["t_s"] - start for k in points], [k["in_flight_tokens"] / 1000 for k in points],
-        where="post", color=TASK_LEVEL, linewidth=1.2,
+        where="post", color=TASK_LEVEL, linewidth=0.8 if compact else 1.2,
     )
     ax.axhline(16.384, color=INK, linewidth=1, linestyle="--")
-    ax.text(108, 16.8, "Budget (16k)", color=INK_2, fontsize=9, ha="left")
+    ax.text(108, 16.8, "Budget (16k)", color=INK_2, fontsize=small, ha="left")
     events = []
     requests = read_jsonl(run / "requests.jsonl")
     for t in sorted(r["completed_s"] for r in requests if r["error"] == "pool_exhausted"):
@@ -271,16 +276,17 @@ def figure_abort_anatomy():
         else:
             events[-1] = t
     shown = [t - start for t in events if start <= t <= end]
-    ax.plot(shown, [20.5] * len(shown), linestyle="none", marker="v", markersize=8, color=POOL,
+    ax.plot(shown, [20.5] * len(shown), linestyle="none", marker="v", markersize=5 if compact else 8, color=POOL,
             markeredgecolor="white", label="Overflow abort")
     ax.set_ylim(0, 22)
     ax.set_xlim(0, 480)
-    ax.set_xlabel("Time in the measured window (s)", color=INK_2)
-    ax.set_ylabel("In-flight footprint\n(k tokens)", color=INK_2)
-    ax.legend(frameon=False, loc="lower right", bbox_to_anchor=(1, 1), labelcolor=INK_2, fontsize=9)
+    ax.set_xlabel("Time in the measured window (s)", color=INK_2, fontsize=small)
+    ax.set_ylabel("In-flight footprint\n(k tokens)", color=INK_2, fontsize=small)
+    ax.legend(frameon=False, loc="lower right", bbox_to_anchor=(1, 1), labelcolor=INK_2, fontsize=small)
     style(ax)
-    fig.tight_layout()
-    fig.savefig(FIGURES / "fig3-abort-anatomy.png", dpi=200)
+    ax.tick_params(labelsize=small)
+    fig.tight_layout(pad=0.3)
+    fig.savefig(FIGURES / ("compact-abort-anatomy.png" if compact else "fig3-abort-anatomy.png"), dpi=300)
     plt.close(fig)
 
 
@@ -545,6 +551,8 @@ def main():
     figure_failures(cfg)
     figure_rates(cfg)
     figure_abort_anatomy()
+    figure_failures(cfg, compact=True)
+    figure_abort_anatomy(compact=True)
     doc = tables(cfg)
     # UTF-8 explicitly: the tables contain "±", which the Windows default code page mangles
     Path(args.tables).write_text(doc.markdown(), encoding="utf-8")
